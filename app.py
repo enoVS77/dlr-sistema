@@ -321,7 +321,7 @@ def processar_arquivo_ponto_fa05h(df_ponto):
 # --- INICIALIZAÇÃO DE SEGURANÇA DOS DADOS NO TOPO ---
 if "logado" not in st.session_state:
     st.session_state.logado = False
-    st.session_state.perfil_atual = None
+    st.perfil_atual = None
     st.session_state.usuario_nome = ""
 
 if "movimentacoes_caixa" not in st.session_state:
@@ -333,78 +333,64 @@ if "pagina_admin_atual" not in st.session_state:
 if "lotes_gerais" not in st.session_state:
     st.session_state.lotes_gerais = []
 
-if "producao_hora" not in st.session_state:
-    st.session_state.producao_hora = [
-        {"Costureira": "Maria Silva", "9H": 12, "10H": 15, "11H": 14, "12H": 10, "14H": 15, "15H": 16, "16H": 14, "17H": 11},
-        {"Costureira": "Juana Costa", "9H": 10, "10H": 12, "11H": 11, "12H": 9, "14H": 13, "15H": 14, "16H": 12, "17H": 10}
-    ]
-
 if "presencas" not in st.session_state:
     st.session_state.presencas = []
 
 if "lotes_externos" not in st.session_state:
     st.session_state.lotes_externos = []
 
-    # --- NOVO: CONECTA O CAIXA AO EXTRATO (COLE NO TOPO DO ARQUIVO) ---
 if "adiantamentos" not in st.session_state:
     st.session_state.adiantamentos = []
 
-if "adiantamentos" not in st.session_state:
-    st.session_state.adiantamentos = []
+if "banco_horas_permanente" not in st.session_state:
+    st.session_state.banco_horas_permanente = []
 
+if "presencas_ponto" not in st.session_state:
+    st.session_state.presencas_ponto = {}
+
+if "status_folha_pagamento" not in st.session_state:
+    st.session_state.status_folha_pagamento = {}
+
+# Dicionário mestre de meses posicionado de forma segura no topo
+MESES_NUM_GLOBAL = {
+    "Janeiro": "01", "Fevereiro": "02", "Março": "03", "Abril": "04",
+    "Maio": "05", "Junho": "06", "Julho": "07", "Agosto": "08",
+    "Setembro": "09", "Outubro": "10", "Novembro": "11", "Dezembro": "12"
+}
+
+# --- CADASTRO E RECONHECIMENTO DE FUNCIONÁRIOS DA DLR CONFECÇÕES ---
 if "funcionarios" not in st.session_state:
     st.session_state.funcionarios = [
-        {"nome": "Maria Silva", "cargo": "Costureira", "pagamento": "Por hora", "valor_hora": 12.00, "externo": "Não"},
-        {"nome": "Ana Oliveira", "cargo": "Costureira", "pagamento": "Por operação (peça)", "valor_hora": 0.00, "externo": "Sim"},
-        {"nome": "João Santos", "cargo": "Entregador", "pagamento": "Por hora", "valor_hora": 14.00, "externo": "Não"}
+        {"nome": "Maria Silva", "cargo": "Costureira", "pagamento": "Por hora", "valor_hora": 12.00, "externo": "Não", "status_pagamento_mes": "Pendente"},
+        {"nome": "Ana Oliveira", "cargo": "Costureira", "pagamento": "Por operação (peça)", "valor_hora": 0.00, "externo": "Sim", "status_pagamento_mes": "Pendente"},
+        {"nome": "João Santos", "cargo": "Entregador", "pagamento": "Por hora", "valor_hora": 14.00, "externo": "Não", "status_pagamento_mes": "Pendente"}
     ]
 
 # --- SISTEMA DE LOGIN: USUÁRIOS E SENHAS ---
 USUARIOS = {
     "admin": {"senha": "204060", "perfil": "admin", "nome": "Administrador"},
     "conf": {"senha": "2026", "perfil": "conferente", "nome": "Setor de Conferência"},
-    "pro": {"senha": "2233", "perfil": "manual", "nome": "Setor Manual / Produção"}
+    "pro": {"senha": "2233", "perfil": "manual", "nome": "Setor Manual / Production"}
 }
 
-if "lotes_gerais" not in st.session_state:
-    st.session_state.lotes_gerais = []
-
 if "producao_hora" not in st.session_state:
     st.session_state.producao_hora = [
         {"Costureira": "Maria Silva", "9H": 12, "10H": 15, "11H": 14, "12H": 10, "14H": 15, "15H": 16, "16H": 14, "17H": 11},
         {"Costureira": "Juana Costa", "9H": 10, "10H": 12, "11H": 11, "12H": 9, "14H": 13, "15H": 14, "16H": 12, "17H": 10}
     ]
 
-# --- ADICIONE ESTE TRECHO JUNTO COM AS OUTRAS INICIALIZAÇÕES NO TOPO ---
-if "lotes_gerais" not in st.session_state:
-    st.session_state.lotes_gerais = []
-
-# --- ADICIONE ESTE TRECHO JUNTO COM AS OUTRAS INICIALIZAÇÕES NO TOPO ---
-if "producao_hora" not in st.session_state:
-    st.session_state.producao_hora = [
-        {"Costureira": "Maria Silva", "9H": 12, "10H": 15, "11H": 14, "12H": 10, "14H": 15, "15H": 16, "16H": 14, "17H": 11},
-        {"Costureira": "Juana Costa", "9H": 10, "10H": 12, "11H": 11, "12H": 9, "14H": 13, "15H": 14, "16H": 12, "17H": 10}
-    ]
-
-# --- INICIALIZAÇÃO E CARREGAMENTO INTELIGENTE DO BANCO DE DADOS ---
-if "funcionarios" not in st.session_state:
-    st.session_state.funcionarios = []
-if "adiantamentos" not in st.session_state:
-    st.session_state.adiantamentos = []
-if "banco_horas_permanente" not in st.session_state:
-    st.session_state.banco_horas_permanente = []
-if "presencas_ponto" not in st.session_state:
-    st.session_state.presencas_ponto = {}
-
-# Dispara a busca automática no arquivo do HD sempre que o sistema carregar
+# Dispara a busca automática e sincronização do cofre físico de forma blindada
 try:
+    # 1. Carrega dados estruturais tradicionais
     carregar_dados_do_banco_para_memoria()
+    
+    # 2. Carrega dados compactos do Super Robô (Sobrepõe e mantém os dados reais do HD)
+    super_robo_carregar_hd_para_memoria()
     
     # Sincroniza as horas gravadas no DB com a gaveta ativa do ponto do mês selecionado
     if "banco_horas_permanente" in st.session_state:
         for reg_h in st.session_state.banco_horas_permanente:
-            # Puxa o mês e ano ativo da tela (Ex: 09/2026)
-            m_atual_conf = meses_num.get(st.session_state.get("dash_ref_mes_v30", "Setembro"), "09")
+            m_atual_conf = MESES_NUM_GLOBAL.get(st.session_state.get("dash_ref_mes_v30", "Setembro"), "09")
             a_atual_conf = st.session_state.get("dash_ref_ano_v30", "2026")
             chave_periodo_ponto = f"{m_atual_conf}/{a_atual_conf}"
             
@@ -1598,7 +1584,16 @@ if st.session_state.perfil_atual == "admin":
                     liquido_a_receber = max(0.0, bruto_colaborador - total_descontos_mes)
                     texto_desconto = f"-R$ {total_descontos_mes:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if total_descontos_mes > 0 else ""
                     chave_status = f"{nome_f}_{mes_sel}_{ano_sel}"
-                    if chave_status not in st.session_state.status_folha_pagamento: 
+                    
+                    # 1. Puxa primeiro o status que o seu super robô trancou na ficha real do funcionário
+                    status_ficha_real = f.get("status_pagamento_mes", "Pendente")
+                    if status_ficha_real not in ["Pendente", "Pago"]:
+                        status_ficha_real = "Pendente"
+                        
+                    # 2. Mantém a compatibilidade com a gaveta de meses da tela sem resetar o valor
+                    if status_ficha_real == "Pago":
+                        st.session_state.status_folha_pagamento[chave_status] = "Pago"
+                    elif chave_status not in st.session_state.status_folha_pagamento: 
                         st.session_state.status_folha_pagamento[chave_status] = "Pendente"
                     
                     linhas_fp.append({
@@ -2765,11 +2760,14 @@ elif st.session_state.perfil_atual == "manual":
                 of_lote = st.text_input("Número da O.F (Ordem de Fabricação)")
                 referencia = st.text_input("Referência do Modelo (Peça)")
                 
-                col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+                col_p1, col_p2, col_p3_chegada, col_p3, col_p4 = st.columns(5) # Mudou para 5 colunas
                 with col_p1:
                     qtd_prevista = st.number_input("Quantidade Total na Nota", min_value=1, step=10, value=1)
                 with col_p2:
                     preco_peca = st.number_input("Preço Unitário (R$)", min_value=0.0, format="%.2f", step=0.50)
+                with col_p3_chegada:
+                    # NOVO CAMPO: Permite escolher ou alterar a Data de Chegada (Padrão: Hoje)
+                    data_chegada_sel = st.date_input("📅 Data de Chegada", value=datetime.now())
                 with col_p3:
                     data_entrega = st.date_input("📅 Previsão de Entrega", value=datetime.now())
                 with col_p4:
@@ -2783,12 +2781,13 @@ elif st.session_state.perfil_atual == "manual":
                     elif preco_peca <= 0:
                         st.error("❌ O preço unitário deve ser maior que R$ 0,00.")
                     else:
-                        data_cadastro_automatica = datetime.now().strftime("%d/%m/%Y")
+                        # Converte a data escolhida no calendário para o formato de texto padrão (dia/mês/ano)
+                        data_cadastro_escolhida = data_chegada_sel.strftime("%d/%m/%Y")
                         data_entrega_txt = data_entrega.strftime("%d/%m/%Y")
                         
                         st.session_state.lotes_gerais.append({
-                            "data_cadastro": data_cadastro_automatica,
-                            "data_inicio_producao": "", # Fica vazio até o status mudar para 'Em produção'
+                            "data_cadastro": data_cadastro_escolhida, # Agora grava a data que você escolheu!
+                            "data_inicio_producao": "",
                             "fornecedor": fornecedor.strip(),
                             "of": of_lote.strip(),
                             "referencia": referencia.strip(),
@@ -2796,12 +2795,17 @@ elif st.session_state.perfil_atual == "manual":
                             "preco": preco_peca,
                             "data_entrega": data_entrega_txt,
                             "prioridade": prioridade,
-                            "status": "Pendente", # Inicializa como Pendente conforme a tabela modelo
+                            "status": "Pendente",
                             "porcentagem_pronta": 0
                         })
+                        
+                        # Tranca de forma vitalícia no banco de dados SQLite do HD
+                        super_robo_trancar_memoria_para_hd()
+                        
                         st.success(f"🎉 Lote OF {of_lote} registrado com sucesso!")
                         st.session_state.contador_form_producao += 1
                         st.rerun()
+                        
                         # --- SEÇÃO 2: ANDAMENTO DE PRODUÇÃO (A.P) ---
         elif st.session_state.sub_pagina_lotes == "A.P":
             st.subheader("📈 Andamento de Produção e Linha do Tempo de Lotes")
@@ -2952,39 +2956,61 @@ elif st.session_state.perfil_atual == "manual":
                         hide_index=True, use_container_width=True, key=chave_tabela_ap
                     )
                     
-                    # Inteligência de checagem nativa
+                    # --- CAIXINHA DE EXCLUSÃO POSICIONADA COM CHAVE DINÂMICA ---
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    lista_ofs_excluir = [str(item["Número da O.F (Ordem de Fabricação)"]) for item in linhas_tabela_ap]
+                    chave_seletor_lixeira = f"sel_of_excluir_manual_v{st.session_state.versao_esteira_ap_man}"
+                    of_selecionada_excluir = st.selectbox("🗑️ Selecione O.F para excluir:", ["Selecionar..."] + lista_ofs_excluir, key=chave_seletor_lixeira)
+                    
+                    # Inteligência de checagem nativa integrada para tabela e lixeira
                     dados_mudaram_ap = False
-                    if chave_tabela_ap in st.session_state and st.session_state[chave_tabela_ap]["edited_rows"]:
+                    if (chave_tabela_ap in st.session_state and st.session_state[chave_tabela_ap]["edited_rows"]) or (of_selecionada_excluir != "Selecionar..."):
                         dados_mudaram_ap = True
                         
                     if dados_mudaram_ap:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        st.warning("⚠️ **Aviso de Alteração:** Mudanças pendentes na produção!")
+                        st.warning("⚠️ **Aviso de Alteração:** Mudanças ou exclusões pendentes na produção!")
                         
                         col_salvar_ap, col_cancelar_ap = st.columns(2)
                         with col_salvar_ap:
-                            if st.button("💾 Confirmar Alterações da Production", use_container_width=True, type="primary", key="btn_salvar_man_v28_fixed"):
-                                for linha in tabela_ap_editada:
-                                    idx_global = linha["ID_Original"]
-                                    
-                                    # --- CORREÇÃO DO PONTO CONSERTA O ERRO NA HORA ---
-                                    original = st.session_state.lotes_gerais[idx_global]
-                                    
-                                    status_salvar = linha.get("Status", original.get("status", "Pendente"))
-                                    prioridade_salvar = linha.get("prioridade", original.get("prioridade", "Não"))
-                                    pct_str = linha.get("Porcentagem já produzido", f"{original.get('porcentagem_pronta', 0)}%")
-                                    pct_salvar = int(pct_str.replace("%", ""))
-                                    
-                                    # RECUPERA AS PEÇAS REAIS SEM RISCO DE APAGAR O COFRE
-                                    valor_original_conferente = int(original.get("qtd_pronta", 0))
-                                    
-                                    if status_salvar == "Em produção" and not original.get("data_inicio_producao"):
-                                        st.session_state.lotes_gerais[idx_global]["data_inicio_producao"] = datetime.now().strftime("%d/%m/%Y")
+                            if st.button("💾 Confirmar Alterações e Exclusões", use_container_width=True, type="primary", key="btn_salvar_man_v28_fixed"):
+                                idx_global_deletar = None
+                                
+                                # 1. EXECUTA A EXCLUSÃO DA O.F SELECIONADA
+                                if of_selecionada_excluir != "Selecionar...":
+                                    for item_visao in linhas_tabela_ap:
+                                        if str(item_visao["Número da O.F (Ordem de Fabricação)"]) == of_selecionada_excluir:
+                                            idx_global_deletar = item_visao["ID_Original"]
+                                            break
+                                            
+                                    if idx_global_deletar is not None and idx_global_deletar < len(st.session_state.lotes_gerais):
+                                        st.session_state.lotes_gerais.pop(idx_global_deletar)
+                                
+                                # 2. EXECUTA OS SALVAMENTOS DE EDIÇÃO DAS OUTRAS LINHAS
+                                if chave_tabela_ap in st.session_state and st.session_state[chave_tabela_ap]["edited_rows"]:
+                                    for idx_visao_str, linha_edt in st.session_state[chave_tabela_ap]["edited_rows"].items():
+                                        idx_global = linhas_tabela_ap[int(idx_visao_str)]["ID_Original"]
                                         
-                                    st.session_state.lotes_gerais[idx_global]["status"] = status_salvar
-                                    st.session_state.lotes_gerais[idx_global]["porcentagem_pronta"] = pct_salvar
-                                    st.session_state.lotes_gerais[idx_global]["qtd_pronta"] = valor_original_conferente
-                                    st.session_state.lotes_gerais[idx_global]["prioridade"] = prioridade_salvar
+                                        # Pula a linha se ela acabou de ser deletada
+                                        if idx_global_deletar is not None and idx_global == idx_global_deletar:
+                                            continue
+                                            
+                                        original = st.session_state.lotes_gerais[idx_global]
+                                        
+                                        status_salvar = linha_edt.get("Status", original.get("status", "Pendente"))
+                                        prioridade_salvar = linha_edt.get("prioridade", original.get("prioridade", "Não"))
+                                        pct_str = linha_edt.get("Porcentagem já produzido", f"{original.get('porcentagem_pronta', 0)}%")
+                                        pct_salvar = int(pct_str.replace("%", ""))
+                                        
+                                        valor_original_conferente = int(original.get("qtd_pronta", 0))
+                                        
+                                        if status_salvar == "Em produção" and not original.get("data_inicio_producao"):
+                                            st.session_state.lotes_gerais[idx_global]["data_inicio_producao"] = datetime.now().strftime("%d/%m/%Y")
+                                            
+                                        st.session_state.lotes_gerais[idx_global]["status"] = status_salvar
+                                        st.session_state.lotes_gerais[idx_global]["porcentagem_pronta"] = pct_salvar
+                                        st.session_state.lotes_gerais[idx_global]["qtd_pronta"] = valor_original_conferente
+                                        st.session_state.lotes_gerais[idx_global]["prioridade"] = prioridade_salvar
                                     
                                 if chave_tabela_ap in st.session_state:
                                     del st.session_state[chave_tabela_ap]
@@ -2996,8 +3022,11 @@ elif st.session_state.perfil_atual == "manual":
                                 
                         with col_cancelar_ap:
                             if st.button("❌ Descartar Mudanças e Voltar", use_container_width=True, key="btn_desc_man_v25"):
+                                # Limpa o cache técnico da planilha
                                 if chave_tabela_ap in st.session_state: 
                                     del st.session_state[chave_tabela_ap]
+                                    
+                                # CORREÇÃO DE OURO: Atualiza a versão para forçar a lixeira a resetar para "Selecionar..."
                                 st.session_state.versao_esteira_ap_man += 1
                                 st.rerun()
                 else:
