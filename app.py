@@ -2449,66 +2449,83 @@ elif st.session_state.perfil_atual == "conferente":
         st.subheader("📥 Importar Relatório do Relógio de Ponto — FA05H")
         st.write("Insira o arquivo gerado no Pen Drive pelo aparelho para atualizar as horas trabalhadas acumuladas do mês:")
         
-        # SOLUÇÃO DEFINITIVA: Pega o mês e o ano direto da data real do computador de forma automática!
-        meses_num = {"Janeiro":"01", "Fevereiro":"02", "Março":"03", "Abril":"04", "Maio":"05", "Junho":"06", "Julho":"07", "Agosto":"08", "Setembro":"09", "Outubro":"10", "Novembro":"11", "Dezembro":"12"}
-        
-        # Cria as duas variáveis usando a data do sistema para a gravação permanente não se perder
-        mes_prod_sel = datetime.now().strftime("%B").title() # Ex: 'Setembro'
-        # Correção automática para português caso o Windows esteja em inglês
-        traducao_meses = {"September": "Setembro", "October": "Outubro", "November": "Novembro", "December": "Dezembro"}
-        mes_prod_sel = traducao_meses.get(mes_prod_sel, mes_prod_sel)
-        
-        ano_prod_sel = datetime.now().strftime("%Y") # Ex: '2026'
-        
-        # Cria a caixinha de upload de arquivos na tela
-        arquivo_ponto = st.file_uploader("Arraste ou selecione o arquivo do Pen Drive (.xlsx ou .xls)", type=["xlsx", "xls"], key="uploader_ponto_conferente_fa05h_v29")
+        arquivo_ponto = st.file_uploader("Arraste ou selecione o arquivo do Pen Drive (.xlsx ou .xls)", type=["xlsx", "xls"])
         
         if arquivo_ponto is not None:
             try:
-                # Carrega o arquivo usando a biblioteca pandas
-                df_ponto = pd.read_excel(arquivo_ponto, sheet_name="Resumo de atend.")
-                st.success("📊 Arquivo do relógio de ponto lido com sucesso na memória da DLR!")
-                
-                # Roda o motor matemático avançado para decifrar a matriz horizontal do cartão
+                # [MOTOR DO EXCEL ORIGINAL DA DLR DO EVERTON]
+                import pandas as pd
+                df_ponto = pd.read_excel(arquivo_ponto)
                 banco_horas_calculado = processar_arquivo_ponto_fa05h(df_ponto)
                 
                 if banco_horas_calculado:
-                    st.markdown("### 📋 Horas Acumuladas Detectadas no Período:")
-                    
-                    # Certifica que o dicionário de presenças temporárias existe
-                    if "presencas_ponto" not in st.session_state:
-                        st.session_state.presencas_ponto = {}
-                        
-                    # CRIA A CHAVE DE PERÍODO CRONOLÓGICA (Ex: 09/2026)
-                    m_ponto_c = meses_num.get(mes_prod_sel, "09")
-                    chave_periodo_ponto_db = f"{m_ponto_c}/{ano_prod_sel}"
-                    
                     linhas_resumo = []
-                    for nome_func, total_h in banco_horas_calculado.items():
-                        nome_f_limpo = nome_func.strip().title()
-                        
-                        # 1. Salva na memória do navegador para exibição imediata
-                        st.session_state.presencas_ponto[nome_f_limpo] = total_h
-                        
-                        # 2. GRAVAÇÃO DEFINITIVA NO HD: Salva no arquivo .db travado por período
-                        db_salvar_ponto_horas(
-                            nome=nome_f_limpo, 
-                            mes_ano=chave_periodo_ponto_db, 
-                            total_horas=total_h
-                        )
-                        
+                    for nome_f_limpo, total_h in banco_horas_calculado.items():
+                        db_salvar_ponto_horas(nome_f_limpo, f"{meses_num.get(st.session_state.get('dash_ref_mes_v30', 'Setembro'), '09')}/{st.session_state.get('dash_ref_ano_v30', '2026')}", total_h)
                         linhas_resumo.append({
-                            "Funcionário": nome_f_limpo, 
+                            "Funcionário": nome_f_limpo,
                             "Total Horas Relógio": f"{total_h:.2f} hrs"
                         })
-                        
                     st.dataframe(linhas_resumo, use_container_width=True, hide_index=True)
-                    st.success("💾 Sucesso! As horas do relógio FA05H foram trancadas de forma permanente no HD da empresa!")
+                    st.success("🎉 Sucesso! As horas do relógio FA05H foram trancadas de forma permanente no HD da empresa!")
                 else:
                     st.warning("⚠️ O arquivo foi lido, mas a estrutura de colunas do resumo do FA05H não foi localizada.")
-                    
             except Exception as e:
                 st.error(f"❌ Erro crítico ao processar o arquivo de ponto. Detalhe técnico: {e}")
+
+        # === AJUSTE DE OURO: COLADO NA PAREDE ESQUERDA PARA APARECER O TEMPO TODO ===
+        st.markdown("---")
+        st.subheader("✍️ Ajuste Manual de Horas (Exceções de Falta de Energia)")
+        st.write("Use este formulário para lançar ou corrigir horas de funcionários quando o relógio ponto falhar:")
+        
+        mes_ajuste_sel = st.selectbox("Mês do Ajuste:", ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"], index=8, key="ajuste_ponto_mes_v1")
+        ano_ajuste_sel = st.selectbox("Ano do Ajuste:", ["2026", "2027", "2028", "2029", "2030"], index=0, key="ajuste_ponto_ano_v1")
+        
+        if "funcionarios" in st.session_state and st.session_state.funcionarios:
+            lista_nomes_func = [f["nome"] for f in st.session_state.funcionarios]
+            
+            with st.form(key="form_ajuste_manual_ponto_v1", clear_on_submit=True):
+                col_aj_1, col_aj_2 = st.columns(2)
+                with col_aj_1:
+                    func_selecionado = st.selectbox("Selecione o Funcionário:", lista_nomes_func)
+                with col_aj_2:
+                    horas_para_adicionar = st.number_input("Quantidade de Horas a Acrescentar (Decimais, ex: 8.0 ou 4.5):", min_value=0.0, max_value=220.0, step=0.5, value=0.0)
+                    
+                motivo_ajuste = st.text_input("Motivo do Ajuste (Opcional):", placeholder="Ex: Falta de energia no dia 22/09")
+                btn_salvar_ajuste_ponto = st.form_submit_button("💾 Confirmar e Somar Horas no Banco")
+                
+                if btn_salvar_ajuste_ponto:
+                    m_num = MESES_NUM_GLOBAL.get(mes_ajuste_sel, "09") if "MESES_NUM_GLOBAL" in locals() else "09"
+                    chave_periodo_ajuste = f"{m_num}/{ano_ajuste_sel}"
+                    nome_func_chave = str(func_selecionado).strip().title()
+                    
+                    registro_encontrado = False
+                    if "banco_horas_permanente" in st.session_state:
+                        for reg_h in st.session_state.banco_horas_permanente:
+                            if reg_h.get("mes_ano") == chave_periodo_ajuste and str(reg_h.get("nome")).strip().title() == nome_func_chave:
+                                horas_antigas = float(reg_h.get("total_horas", 0.0))
+                                reg_h["total_horas"] = horas_antigas + float(horas_para_adicionar)
+                                registro_encontrado = True
+                                break
+                    
+                    if not registro_encontrado:
+                        if "banco_horas_permanente" not in st.session_state:
+                            st.session_state.banco_horas_permanente = []
+                        st.session_state.banco_horas_permanente.append({
+                            "nome": nome_func_chave,
+                            "mes_ano": chave_periodo_ajuste,
+                            "total_horas": float(horas_para_adicionar)
+                        })
+                        
+                    # --- A CORREÇÃO DE OURO: GRAVA NOS DOIS MOTORES DE BANCO DE DADOS ---
+                    db_salvar_ponto_horas(nome_func_chave, chave_periodo_ajuste, st.session_state.banco_horas_permanente[-1]["total_horas"] if not registro_encontrado else reg_h["total_horas"])
+                    st.session_state.presencas_ponto[nome_func_chave] = float(st.session_state.banco_horas_permanente[-1]["total_horas"] if not registro_encontrado else reg_h["total_horas"])
+                    super_robo_trancar_memoria_para_hd()
+                    
+                    st.success(f"🎉 Sucesso! Foi acrescentado +{horas_para_adicionar} horas na ficha de {func_selecionado}!")
+                    st.rerun()
+        else:
+            st.warning("⚠️ Cadastre funcionários no sistema primeiro antes de realizar ajustes manuais de ponto.")
         
         # --- 🪡 ÁREA 3: MANUAL / PRODUÇÃO — DLR ---
 elif st.session_state.perfil_atual == "manual":
