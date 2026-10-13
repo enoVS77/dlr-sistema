@@ -1,3139 +1,2483 @@
 import streamlit as st
-from datetime import datetime
-# Configuração da página para um visual moderno e amplo
-st.set_page_config(page_title="Sistema DLR - Confecção", layout="wide", page_icon="🧵")
+import pandas as pd
+import sqlite3
+import datetime
+from datetime import datetime as dt_class
 
-# Estilização básica para um visual mais limpo e profissional
+# ==============================================================================
+# 🎨 CONFIGURAÇÃO VISUAL MASTER DA TELA (TELA CHEIA TOTAL DE PONTA A PONTA)
+# ==============================================================================
+st.set_page_config(
+    page_title="DLR Confecções — ERP Corporativo",
+    page_icon="🪡",
+    layout="wide", # <=== DESTRANCA AS LATERAIS DO SEU MONITOR!
+    initial_sidebar_state="expanded"
+)
+
 st.markdown("""
     <style>
-    .block-container {padding-top: 2rem; padding-bottom: 2rem;}
-    h1 {color: #1E3A8A; font-weight: 700;}
-    h2 {color: #2563EB; font-weight: 600;}
-    
-    /* --- ESTILIZAÇÃO DOS BOTÕES COM COR DE AÇAÍ --- */
-    div.stButton > button {
-        background-color: #4A154B !important; /* Cor de Açaí predominante */
-        color: white !important;
-        border-radius: 6px !important;
-        border: none !important;
-        transition: all 0.3s ease;
-    }
-    div.stButton > button:hover {
-        background-color: #6B206B !important; /* Açaí um pouco mais claro no mouse */
-        color: white !important;
-    }
+        .block-container {
+            max-width: 100% !important;
+            padding-left: 2rem !important;
+            padding-right: 2rem !important;
+            padding-top: 1.5rem !important;
+            padding-bottom: 1.5rem !important;
+        }
+        /* Design compacto do formulário de login */
+        div[data-testid="stForm"] {
+            max-width: 400px !important;
+            margin: 0 auto !important;
+            padding: 20px !important;
+            border-radius: 10px !important;
+            border: 1px solid #4A154B !important;
+        }
+        footer {visibility: hidden;}
+
+        /* 🚀 TRAVA MÁGICA ATUALIZADA: Força TODO o texto do período na barra lateral a encolher */
+        [data-testid="stSidebar"] [data-testid="stMarkdown"] p,
+        [data-testid="stSidebar"] h3,
+        [data-testid="stSidebar"] span {
+            font-size: 18px !important;      /* Largura/Tamanho perfeito e sutil para o texto! */
+            font-weight: 500 !important;     /* Deixa a letra fina e corporativa */
+            color: #CCCCCC !important;       /* Cor cinza clara discreta */
+        }
     </style>
 """, unsafe_allow_html=True)
 
-import sqlite3
+# Inicializa as variáveis espiãs de controle de acesso se não existirem
+if "sistema_autorizado" not in st.session_state:
+    st.session_state.sistema_autorizado = False
+if "perfil_usuario" not in st.session_state:
+    st.session_state.perfil_usuario = ""
 
-def inicializar_banco_dados_sqlite():
-    """
-    Cria o arquivo de banco de dados e as tabelas permanentes da DLR Confecções no HD.
-    """
-    conexao = sqlite3.connect("dlr_confecoes.db")
-    cursor = conexao.cursor()
+# ==============================================================================
+# 🔑 CENTRAL DE SEGURANÇA MASTER DLR — 3 PERFIS INDEPENDENTES
+# ==============================================================================
+SENHA_ADMINISTRADOR = "204060"
+SENHA_CONFERENCIA   = "2026"
+SENHA_SETOR_MANUAL  = "2233"
+
+# ==============================================================================
+# 🗄️ 2. INICIALIZAÇÃO DO BANCO DE DADOS LOCAL OFICIAL — COFRE V3 DEFINITIVO
+# ==============================================================================
+def inicializar_banco_dados():
+    conn = sqlite3.connect("dlr_confecoes_v3.db")
+    cursor = conn.cursor()
     
-    # 1. Tabela permanente de Funcionários e Chaves PIX
+    # Gaveta 1: Ficha Viva dos Funcionários Ativos (Fábrica Geral)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS funcionarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT UNIQUE NOT NULL,
-            cargo TEXT,
-            pagamento TEXT,
-            valor_hora REAL,
-            chave_pix TEXT
+            nome TEXT UNIQUE,
+            tipo_pagamento TEXT,
+            valor_base REAL,
+            chave_pix TEXT,
+            externo TEXT DEFAULT 'Não',
+            status_cadastro TEXT DEFAULT 'Ativo'
         )
     """)
     
-    # 2. Tabela permanente para registrar os Vales e Adiantamentos
+    # Gaveta 2: COFRE HISTÓRICO DA FOLHA DE PAGAMENTO (Administração)
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS adiantamentos (
+        CREATE TABLE IF NOT EXISTS historico_folha_pagamento (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT,
-            data TEXT,
-            tipo TEXT,
-            valor_bruto REAL,
-            valor_parcela REAL,
-            status_vale TEXT
-        )
-    """)
-    
-    # 3. Tabela permanente para registrar as Horas Acumuladas do Relógio FA05H
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS registro_ponto (
-            nome TEXT,
             mes_ano TEXT,
-            total_horas REAL,
-            PRIMARY KEY (nome, mes_ano)
+            nome TEXT,
+            tipo_pagamento TEXT,
+            valor_base REAL,
+            chave_pix TEXT,
+            horas_trabalhadas REAL DEFAULT 0.0,
+            total_vales REAL DEFAULT 0.0,
+            valor_liquido REAL DEFAULT 0.0,
+            status_pagto TEXT DEFAULT 'Pendente'
         )
     """)
-    
-    conexao.commit()
-    conexao.close()
 
-import sqlite3
-import json
-
-def inicializar_super_cofre_hd():
-    """
-    Cria as tabelas físicas permanentes no HD para guardar os dados da empresa 
-    sem interferir em nenhuma linha do código visual das telas.
-    """
-    conn = sqlite3.connect("dlr_confecoes.db")
-    cursor = conn.cursor()
-    
-    cursor.execute("CREATE TABLE IF NOT EXISTS super_lotes (id INTEGER PRIMARY KEY AUTOINCREMENT, dados_json TEXT)")
-    cursor.execute("CREATE TABLE IF NOT EXISTS super_caixa (id INTEGER PRIMARY KEY AUTOINCREMENT, dados_json TEXT)")
-    cursor.execute("CREATE TABLE IF NOT EXISTS super_funcionarios (id INTEGER PRIMARY KEY AUTOINCREMENT, dados_json TEXT)")
-    cursor.execute("CREATE TABLE IF NOT EXISTS super_producao_geral (id INTEGER PRIMARY KEY AUTOINCREMENT, hist_json TEXT, prod_json TEXT)")
-    cursor.execute("CREATE TABLE IF NOT EXISTS super_banco_producao (id INTEGER PRIMARY KEY AUTOINCREMENT, dados_json TEXT)")
-    
-    # 6. GAVETA ADICIONADA: Tranca permanentemente o histórico e controle de Serviços Externos no HD
-    cursor.execute("CREATE TABLE IF NOT EXISTS super_servicos_externos (id INTEGER PRIMARY KEY AUTOINCREMENT, dados_json TEXT)")
-    
-    conn.commit()
-    conn.close()
-
-def super_robo_carregar_hd_para_memoria():
-    """
-    [ROBÔ INVISÍVEL - LEITURA]
-    Executado apenas 1 vez quando o sistema liga. Resgata os históricos do arquivo físico
-    do HD e abastece as gavetas vivas de todas as telas.
-    """
-    try:
-        conn = sqlite3.connect("dlr_confecoes.db")
-        cursor = conn.cursor()
-        
-        # 1. Lotes Gerais
-        cursor.execute("SELECT dados_json FROM super_lotes ORDER BY id DESC LIMIT 1")
-        row_lotes = cursor.fetchone()
-        if row_lotes and "lotes_gerais" not in st.session_state:
-            st.session_state.lotes_gerais = json.loads(row_lotes[0])
-            
-        # 2. Livro Caixa e Vales
-        cursor.execute("SELECT dados_json FROM super_caixa ORDER BY id DESC LIMIT 1")
-        row_caixa = cursor.fetchone()
-        if row_caixa and "movimentacoes_caixa" not in st.session_state:
-            st.session_state.movimentacoes_caixa = json.loads(row_caixa[0])
-            
-        # 3. Cadastro de Funcionários
-        cursor.execute("SELECT dados_json FROM super_funcionarios ORDER BY id DESC LIMIT 1")
-        row_func = cursor.fetchone()
-        if row_func and "funcionarios" not in st.session_state:
-            st.session_state.funcionarios = json.loads(row_func[0])
-            
-        # 4. Produção de Hora em Hora e Gráfico Individual
-        cursor.execute("SELECT hist_json, prod_json FROM super_producao_geral ORDER BY id DESC LIMIT 1")
-        row_prod = cursor.fetchone()
-        if row_prod:
-            if "historico_producao_hora" not in st.session_state:
-                st.session_state.historico_producao_hora = json.loads(row_prod[0])
-            if "producao_hora" not in st.session_state:
-                st.session_state.producao_hora = json.loads(row_prod[1])
-                
-        # 5. Resgata o histórico real de Fechamento por Dia do HD
-        cursor.execute("SELECT dados_json FROM super_banco_producao ORDER BY id DESC LIMIT 1")
-        row_banco_prod = cursor.fetchone()
-        if row_banco_prod:
-            st.session_state.banco_producao_diaria = json.loads(row_banco_prod[0])
-            
-        # 6. PONTE ADICIONADA: Resgata a tabela legítima de Lotes Externos do HD ao iniciar
-        cursor.execute("SELECT dados_json FROM super_servicos_externos ORDER BY id DESC LIMIT 1")
-        row_ext = cursor.fetchone()
-        if row_ext:
-            st.session_state.lotes_externos = json.loads(row_ext[0])
-            
-        conn.close()
-    except Exception as e:
-        print(f"Aviso do Super Robô (Leitura): Gavetas iniciando limpas. {e}")
-
-def super_robo_trancar_memoria_para_hd():
-    """
-    [ROBÔ INVISÍVEL - GRAVAÇÃO VITALÍCIA]
-    Varre as gavetas vivas e tranca direto no arquivo .db de forma blindada.
-    """
-    try:
-        conn = sqlite3.connect("dlr_confecoes.db")
-        cursor = conn.cursor()
-        
-        # 1. Tranca os Lotes Internos
-        if "lotes_gerais" in st.session_state and st.session_state.lotes_gerais:
-            cursor.execute("DELETE FROM super_lotes")
-            cursor.execute("INSERT INTO super_lotes (dados_json) VALUES (?)", (json.dumps(st.session_state.lotes_gerais, ensure_ascii=False),))
-            
-        # 2. Tranca o Livro Caixa e Vales
-        if "movimentacoes_caixa" in st.session_state and st.session_state.movimentacoes_caixa:
-            cursor.execute("DELETE FROM super_caixa")
-            cursor.execute("INSERT INTO super_caixa (dados_json) VALUES (?)", (json.dumps(st.session_state.movimentacoes_caixa, ensure_ascii=False),))
-            
-        # 3. Tranca as Costureiras e Chaves PIX
-        if "funcionarios" in st.session_state and st.session_state.funcionarios:
-            cursor.execute("DELETE FROM super_funcionarios")
-            cursor.execute("INSERT INTO super_funcionarios (dados_json) VALUES (?)", (json.dumps(st.session_state.funcionarios, ensure_ascii=False),))
-            
-        # 4. Tranca a Produção de Hora em Hora
-        hist_viva = st.session_state.get("historico_producao_hora", [])
-        prod_viva = st.session_state.get("producao_hora", [])
-        if hist_viva or prod_viva:
-            cursor.execute("DELETE FROM super_producao_geral")
-            cursor.execute("INSERT INTO super_producao_geral (hist_json, prod_json) VALUES (?, ?)", (
-                json.dumps(hist_viva, ensure_ascii=False),
-                json.dumps(prod_viva, ensure_ascii=False)
-            ))
-            
-        # 5. Tranca a gaveta de faturamento diário
-        if "banco_producao_diaria" in st.session_state and st.session_state.banco_producao_diaria:
-            cursor.execute("DELETE FROM super_banco_producao")
-            cursor.execute("INSERT INTO super_banco_producao (dados_json) VALUES (?)", (json.dumps(st.session_state.banco_producao_diaria, ensure_ascii=False),))
-            
-        # 6. PONTE ADICIONADA: Captura a gaveta de Serviços Externos e tranca de forma vitalícia no HD
-        if "lotes_externos" in st.session_state and st.session_state.lotes_externos:
-            cursor.execute("DELETE FROM super_servicos_externos")
-            cursor.execute("INSERT INTO super_servicos_externos (dados_json) VALUES (?)", (json.dumps(st.session_state.lotes_externos, ensure_ascii=False),))
-            
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"Erro do Super Robô ao salvar lotes_externos no HD: {e}")
-
-# Executa as leituras automáticas na abertura do programa
-inicializar_super_cofre_hd()
-super_robo_carregar_hd_para_memoria()
-
-
-# Executa a ativação do cofre no HD assim que o programa inicia
-inicializar_banco_dados_sqlite()
-def carregar_dados_do_banco_para_memoria():
-    """
-    Busca tudo o que está salvo no HD (SQLite) e alimenta o st.session_state 
-    para que as telas do sistema exibam os dados na inicialização.
-    """
-    # 1. Carrega os Funcionários cadastrados
-    conn = sqlite3.connect("dlr_confecoes.db")
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT nome, cargo, pagamento, valor_hora, chave_pix FROM funcionarios")
-    st.session_state.funcionarios = [dict(row) for row in cursor.fetchall()]
-    
-    # 2. Carrega o Histórico de Vales e Adiantamentos
-    cursor.execute("SELECT nome, data, tipo, valor_bruto, valor_parcela, status_vale FROM adiantamentos")
-    st.session_state.adiantamentos = [dict(row) for row in cursor.fetchall()]
-    
-    # 3. Carrega o Histórico de Horas do Relógio de Ponto FA05H
-    cursor.execute("SELECT nome, mes_ano, total_horas FROM registro_ponto")
-    st.session_state.banco_horas_permanente = [dict(row) for row in cursor.fetchall()]
-    
-    conn.close()
-
-def db_salvar_funcionario(nome, cargo, pagamento, valor_hora, chave_pix):
-    """Grava um novo colaborador diretamente no banco de dados permanente."""
-    try:
-        conn = sqlite3.connect("dlr_confecoes.db")
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT OR REPLACE INTO funcionarios (nome, cargo, pagamento, valor_hora, chave_pix)
-            VALUES (?, ?, ?, ?, ?)
-        """, (nome.strip(), cargo, pagamento, float(valor_hora), chave_pix.strip()))
-        conn.commit()
-        conn.close()
-        carregar_dados_do_banco_para_memoria() # Atualiza as planilhas na hora
-        return True
-    except Exception as e:
-        print(f"Erro ao salvar funcionário no DB: {e}")
-        return False
-
-def db_salvar_vale(nome, data, tipo, valor_bruto, valor_parcela, status_vale="Ativo"):
-    """Grava um novo adiantamento ou vale no banco de dados permanente."""
-    conn = sqlite3.connect("dlr_confecoes.db")
-    cursor = conn.cursor()
+    # Gaveta 3: ESTEIRA GERAL DE LOTES (Conferência e Manual)
     cursor.execute("""
-        INSERT INTO adiantamentos (nome, data, tipo, valor_bruto, valor_parcela, status_vale)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (nome.strip(), data.strip(), tipo, float(valor_bruto), float(valor_parcela), status_vale))
-    conn.commit()
-    conn.close()
-    carregar_dados_do_banco_para_memoria()
+        CREATE TABLE IF NOT EXISTS lotes_gerais (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data_cadastro TEXT,
+            data_inicio_producao TEXT DEFAULT '',
+            data_entrega TEXT,
+            fornecedor TEXT,
+            of TEXT UNIQUE,
+            referencia TEXT,
+            qtd_prevista INTEGER,
+            preco REAL,
+            status TEXT DEFAULT 'Pendente',
+            porcentagem_pronta INTEGER DEFAULT 0,
+            qtd_pronta INTEGER DEFAULT 0,
+            prioridade TEXT DEFAULT 'Não'
+        )
+    """)
 
-def db_salvar_ponto_horas(nome, mes_ano, total_horas):
-    """Grava as horas calculadas do Pen Drive do FA05H no banco de dados permanente."""
-    conn = sqlite3.connect("dlr_confecoes.db")
-    cursor = conn.cursor()
+    # Gaveta 4: GAVETA DO LIVRO CAIXA GERAL (Bota o motor no topo para o Dashboard ler de primeira!)
     cursor.execute("""
-        INSERT OR REPLACE INTO registro_ponto (nome, mes_ano, total_horas)
-        VALUES (?, ?, ?)
-    """, (nome.strip().title(), mes_ano.strip(), float(total_horas)))
+        CREATE TABLE IF NOT EXISTS livro_caixa (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mes_ano TEXT,
+            data_movimento TEXT,
+            tipo_movimentacao TEXT,
+            descricao TEXT,
+            valor_total REAL,
+            parcela_atual INTEGER DEFAULT 1,
+            total_parcelas INTEGER DEFAULT 1,
+            valor_parcela REAL
+        )
+    """)
+
+    # Gaveta 5: GAVETA DE SERVIÇOS EXTERNOS (Evita o mesmo erro na aba terceirizada!)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS servicos_externos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mes_ano TEXT,
+            data_lancamento TEXT,
+            costureira TEXT,
+            of_numero TEXT,
+            referencia_peca TEXT,
+            nome_peca TEXT,
+            valor_peca REAL,
+            qtd_pecas INTEGER,
+            valor_total REAL,
+            status_servico TEXT DEFAULT 'Em produção',
+            situacao_pagto TEXT DEFAULT 'Pendente'
+        )
+    """)
+    # 🚀 NOVA GAVETA DE MEMÓRIA: Guarda os registros de eficiência horária da fábrica
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS producao_hora_hora (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, mes_ano TEXT, data_lancamento TEXT, costureira TEXT,
+            operacao TEXT, qtd_pecas INTEGER, valor_unitario REAL, valor_total REAL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS operacoes_frente (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, nome_operacao TEXT UNIQUE, preco_peca REAL
+        )
+    """)
+
+    # 🚀 GAVETA DE MEMÓRIA DO PONTO: Guarda as horas trabalhadas mensais das horistas
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS registro_ponto_horistas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, mes_ano TEXT, data_registro TEXT, costureira TEXT, horas_totais REAL
+        )
+    """)
+
     conn.commit()
     conn.close()
-    carregar_dados_do_banco_para_memoria()
 
-def processar_arquivo_ponto_fa05h(df_ponto):
-    """
-    Motor Avançado e Preciso para a aba 'Resumo de atend.' do FA05H.
-    Decifra a contagem de horas e minutos em valores decimais reais.
-    """
-    horas_acumuladas = {}
+inicializar_banco_dados()
+
+# ==============================================================================
+# 🌍 3. CENTRAL MASTER DE CALENDÁRIO GLOBAL DLR
+# ==============================================================================
+lista_meses_sistema = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+lista_anos_sistema = ["2026", "2027", "2028", "2029", "2030"]
+
+mes_relogio_atual = datetime.datetime.now().month
+ano_relogio_atual = str(datetime.datetime.now().year)
+
+if "calendario_master_mes" not in st.session_state:
+    st.session_state.calendario_master_mes = lista_meses_sistema[mes_relogio_atual - 1]
+if "calendario_master_ano" not in st.session_state:
+    st.session_state.calendario_master_ano = ano_relogio_atual
+
+mes_ativo_txt = st.session_state.calendario_master_mes
+ano_ativo_txt = st.session_state.calendario_master_ano
+
+mapa_meses_num = {"Janeiro":"01", "Fevereiro":"02", "Março":"03", "Abril":"04", "Maio":"05", "Junho":"06", "Julho":"07", "Agosto":"08", "Setembro":"09", "Outubro":"10", "Novembro":"11", "Dezembro":"12"}
+mes_ativo_num = mapa_meses_num[mes_ativo_txt]
+periodo_ativo_chave = f"{mes_ativo_num}/{ano_ativo_txt}"
+
+if "pagina_admin_atual" not in st.session_state: st.session_state.pagina_admin_atual = "🏠 Dashboard Inicial"
+if "pagina_conf_atual" not in st.session_state: st.session_state.pagina_conf_atual = "📈 Progresso de Lotes"
+if "pagina_manual_atual" not in st.session_state: st.session_state.pagina_manual_atual = "📦 Entrada de Lotes (Fornecedor)"
+
+# 🔒 4. PORTAL DE LOGIN SUPREMO — SUPER COMPACTO E ELEVADO (DESIGN DE ALTO NÍVEL)
+# ==============================================================================
+if not st.session_state.sistema_autorizado:
+    # CSS Injetado de Ouro: Oculta a barra lateral e força o bloco a ter no máximo 400px centralizado
+    st.markdown("""
+        <style>
+            [data-testid="stSidebar"] { display: none !important; }
+            [data-testid="stSidebarCollapseButton"] { display: none !important; }
+            
+            /* Remove margens e centraliza o bloco principal */
+            .block-container {
+                max-width: 100% !important;
+                padding-top: 2rem !important;
+            }
+            
+            /* Encolhe e estiliza a caixa do formulário para não ficar esparramada */
+            div[data-testid="stForm"] {
+                max-width: 400px !important;
+                margin: 0 auto !important;
+                padding: 20px !important;
+                border-radius: 10px !important;
+                border: 1px solid #4A154B !important;
+            }
+            footer {visibility: hidden;}
+        </style>
+    """, unsafe_allow_html=True)
     
-    try:
-        # Força todas as colunas a limparem os nomes e espaços de cabeçalho
-        df_ponto.columns = [str(c).strip() for c in df_ponto.columns]
+    # Cria colunas simétricas para espremer o conteúdo exatamente no meio
+    col_l1, col_l_centro, col_l2 = st.columns([1.2, 1, 1.2])
+    
+    with col_l_centro:
+        # Exibe a logo oficial rosa de forma super compacta e sutil
+        try:
+            st.image("logo_dlr.png.png", width=380)
+        except:
+            st.markdown("<h2 style='text-align: center; color: #D81B60; margin-top: 0px;'>DLR CONFECÇÕES</h2>", unsafe_allow_html=True)
+            
+        st.markdown("<p style='text-align: center; color: #B0BEC5; font-size: 14px; margin-top: -10px; margin-bottom: 20px;'>🔑 Controle de Acesso Corporativo</p>", unsafe_allow_html=True)
         
-        # Localiza as colunas ideais ignorando maiúsculas e minúsculas
-        col_nome = next((c for c in df_ponto.columns if "nome" in c.lower() or "unnamed: 1" in c.lower()), None)
-        col_hora_real = next((c for c in df_ponto.columns if "real" in c.lower() or "unnamed: 4" in c.lower()), None)
+        # Formulário compacto travado na largura de 400px
+        with st.form(key="form_login_dlr_supremo_triplo_compacto", clear_on_submit=True):
+            perfil_input = st.selectbox("Selecione o seu Setor:", ["Administração", "Conferência / Qualidade", "Setor Manual / Production"])
+            senha_input = st.text_input("Senha de Acesso:", type="password")
+            btn_acessar = st.form_submit_button("Entrar no Sistema", use_container_width=True)
+            
+        if btn_acessar:
+            if perfil_input == "Administração" and senha_input == SENHA_ADMINISTRADOR:
+                st.session_state.sistema_autorizado = True
+                st.session_state.perfil_usuario = "Admin"
+                st.rerun()
+            elif perfil_input == "Conferência / Qualidade" and senha_input == SENHA_CONFERENCIA:
+                st.session_state.sistema_autorizado = True
+                st.session_state.perfil_usuario = "Conferencia"
+                st.rerun()
+            elif perfil_input == "Setor Manual / Production" and senha_input == SENHA_SETOR_MANUAL:
+                st.session_state.sistema_autorizado = True
+                st.session_state.perfil_usuario = "Manual"
+                st.rerun()
+            else:
+                st.error("❌ Senha incorreta!")
+
+# 🔓 5. ESTRUTURA DOS MENUS ROXOS LATERAIS (VINCULADO AO PERFIL AUTORIZADO)
+# ==============================================================================
+else:
+    with st.sidebar:
+        st.title("🧵 DLR Confecções")
+        st.subheader(f"📅 Período: {mes_ativo_txt}/{ano_ativo_txt}")
+        st.markdown("---")
+        st.markdown("### 📁 Menu de Páginas")
         
-        if col_nome and col_hora_real:
-            for idx, linha in df_ponto.iterrows():
-                nome_cru = str(linha[col_nome]).strip()
-                tempo_str = str(linha[col_hora_real]).strip()
+        if st.session_state.perfil_usuario == "Admin":
+            paginas_admin = {
+                "🏠 Dashboard Inicial": "🏠 Dashboard Inicial",
+                "👤 Cadastrar Funcionário": "👥 Funcionários & Vales",
+                "📋 Lotes em Andamento": "📋 Lotes em Andamento",
+                "🚚 Serviços Externos": "🚚 Serviços Externos",
+                "💰 Financeiro Geral": "💰 Financeiro Geral",
+                "📅 Extrato do Mês": "📅 Extrato do Mês"
+            }
+            for label, pag_id in paginas_admin.items():
+                if st.session_state.pagina_admin_atual == pag_id:
+                    st.markdown(f"<div style='background-color: #FFFFFF; color: #000000; padding: 10px 15px; border-radius: 6px; font-weight: bold; text-align: center; border: 2px solid #4A154B; margin-bottom: 10px; font-size: 14px;'>{label}</div>", unsafe_allow_html=True)
+                else:
+                    if st.button(label, use_container_width=True, key=f"sidebar_btn_adm_{label}"):
+                        st.session_state.pagina_admin_atual = pag_id; st.rerun()
+            menu_selecionado = st.session_state.pagina_admin_atual
+            
+        elif st.session_state.perfil_usuario == "Conferencia":
+            if "pagina_conf_atual" not in st.session_state:
+                st.session_state.pagina_conf_atual = "📈 Progresso de Lotes"
                 
-                # Filtra cabeçalhos e linhas em branco do Excel
-                if nome_cru and nome_cru.lower() != "nan" and nome_cru.lower() != "nome" and tempo_str.lower() != "nan":
-                    total_horas_dec = 0.0
+            paginas_conf = {
+                "📈 Progresso de Lotes": "📈 Progresso de Lotes",
+                "📥 Importar Ponto": "📥 Importar Ponto",
+                "📅 Extrato do Mês": "📅 Extrato do Mês"
+            }
+            for label, pag_id in paginas_conf.items():
+                if st.session_state.pagina_conf_atual == pag_id:
+                    st.markdown(f"<div style='background-color: #FFFFFF; color: #000000; padding: 10px 15px; border-radius: 6px; font-weight: bold; text-align: center; border: 2px solid #4A154B; margin-bottom: 10px; font-size: 14px;'>{label}</div>", unsafe_allow_html=True)
+                else:
+                    if st.button(label, use_container_width=True, key=f"sidebar_btn_conf_{label}"):
+                        st.session_state.pagina_conf_atual = pag_id; st.rerun()
+            menu_selecionado = st.session_state.pagina_conf_atual
+
+        elif st.session_state.perfil_usuario == "Manual":
+            menus_manual = {
+                "📦 Entrada de Lotes (Fornecedor)": "📦 Entrada de Lotes (Fornecedor)",
+                "⏱️ Produção de Hora em Hora": "⏱️ Produção de Hora em Hora",
+                "📊 Peças Produzidas por Dia (P.D)": "📊 Peças Produzidas por Dia (P.D)"
+            }
+            for label, pag_id in menus_manual.items():
+                if st.session_state.pagina_manual_atual == pag_id:
+                    st.markdown(f"<div style='background-color: #FFFFFF; color: #000000; padding: 10px 15px; border-radius: 6px; font-weight: bold; text-align: center; border: 2px solid #4A154B; margin-bottom: 10px; font-size: 14px;'>{label}</div>", unsafe_allow_html=True)
+                else:
+                    if st.button(label, use_container_width=True, key=f"sidebar_btn_man_{label}"):
+                        st.session_state.pagina_manual_atual = pag_id; st.rerun()
+            menu_selecionado = st.session_state.pagina_manual_atual
+            
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        
+        # 🚀 REQUISITO VITALÍCIO: O botão Sair fecha o bloco do with de forma limpa!
+        if st.button("🚪 SAIR DO SISTEMA", use_container_width=True, type="secondary", key="btn_sair_lateral_master"):
+            st.session_state.sistema_autorizado = False
+            st.session_state.perfil_usuario = ""
+            st.rerun()
+# ==============================================================================
+    # 🏢 CONTEÚDO EXCLUSIVO DO ADMINISTRADOR (5 CARDS SUPREMOS DE LARGURA TOTAL)
+    # ==============================================================================
+    if st.session_state.perfil_usuario == "Admin":
+        if menu_selecionado == "🏠 Dashboard Inicial":
+            st.title("🏠 Painel Executivo — Gestão de Desempenho DLR")
+            
+            col_m_master, col_a_master, col_esp_master = st.columns(3)
+            with col_m_master:
+                mes_escolhido = st.selectbox("Mês de Referência:", lista_meses_sistema, index=lista_meses_sistema.index(st.session_state.calendario_master_mes), key="caixa_master_mes_admin_v4")
+            with col_a_master:
+                ano_escolhido = st.selectbox("Ano de Referência:", lista_anos_sistema, index=lista_anos_sistema.index(st.session_state.calendario_master_ano), key="caixa_master_ano_admin_v4")
+                
+            if mes_escolhido != st.session_state.calendario_master_mes or ano_escolhido != st.session_state.calendario_master_ano:
+                st.session_state.calendario_master_mes = mes_escolhido
+                st.session_state.calendario_master_ano = ano_escolhido
+                st.rerun()
+
+            st.markdown(f"Exibindo balanço consolidado de: **{mes_ativo_txt} de {ano_ativo_txt}**")
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            entradas_caixa_mes = 0.0; saidas_caixa_mes = 0.0; total_folha_mes = 0.0; total_externo_mes = 0.0
+            
+            conn = sqlite3.connect("dlr_confecoes_v3.db")
+            cursor = conn.cursor()
+            
+            # 1. Soma as Entradas de Caixa Fixadas no Mês de Cadastro Master (SÓ NO MÊS CORRENTE)
+            # 🚀 TRAVA DEFINITIVA: O faturamento ignora as datas digitadas e olha unicamente a coluna mes_ano_cadastro!
+            cursor.execute("""
+                SELECT SUM(qtd_pronta * preco) 
+                FROM lotes_gerais 
+                WHERE status = 'Concluído' AND mes_ano_cadastro = ?
+            """, (periodo_ativo_chave,))
+            res_e = cursor.fetchone()
+            entradas_lotes = float(res_e[0]) if res_e and res_e[0] is not None else 0.0
+            
+            cursor.execute("SELECT SUM(valor_parcela) FROM livro_caixa WHERE mes_ano = ? AND tipo_movimentacao = 'Entrada'", (periodo_ativo_chave,))
+            res_cx_e = cursor.fetchone()
+            entradas_manuais = float(res_cx_e[0]) if res_cx_e and res_cx_e[0] is not None else 0.0
+            entradas_caixa_mes = entradas_lotes + entradas_manuais
+
+            # --- 🔸 2. SOMA AS SAÍDAS GERAIS (GÊMEO IDENTICO DA TABELA VISUAL DO EXTRATO GERAL) ---
+            # 🚀 SINCRONISMO ABSOLUTO: Executa exatamente a mesma regra linha por linha da planilha E.G!
+            conn_saidas_master = sqlite3.connect("dlr_confecoes_v3.db")
+            cursor_saidas_master = conn_saidas_master.cursor()
+            
+            cursor_saidas_master.execute("""
+                SELECT tipo_movimentacao, parcela_atual, valor_total, valor_parcela 
+                FROM livro_caixa 
+                WHERE mes_ano = ?
+            """, (periodo_ativo_chave,))
+            todos_movimentos_caixa = cursor_saidas_master.fetchall()
+            cursor_saidas_master.close()
+            conn_saidas_master.close()
+            
+            saidas_caixa_mes_calculado = 0.0
+            for mov_c in todos_movimentos_caixa:
+                t_mov = str(mov_c[0]).strip()
+                p_atual = int(mov_c[1]) if mov_c[1] is not None else 1
+                v_total = float(mov_c[2]) if mov_c[2] is not None else 0.0
+                v_parc = float(mov_c[3]) if mov_c[3] is not None else 0.0
+                
+                # REPLICA A REGRA DA SUA TABELA: Se for Vale, só computa no card se for a parcela 1 e pega o valor TOTAL bruto!
+                if t_mov == "Vale":
+                    if p_atual == 1:
+                        saidas_caixa_mes_calculado += v_total
+                # Se for Saída manual comum (Gasolina, Contas), soma o valor normal da despesa
+                elif t_mov == "Saída":
+                    saidas_caixa_mes_calculado += v_parc
+            
+            # Tranca o valor blindado final na variável oficial do Dashboard para renderizar no card laranja
+            saidas_caixa_mes = float(saidas_caixa_mes_calculado)
+            # 3. Soma a Folha Interna Inteligente (Fixo Integral + Horistas por Produção de Ponto)
+            total_folha_mes = 0.0
+            cursor.execute("SELECT nome, tipo_pagamento, valor_base, total_vales FROM historico_folha_pagamento WHERE mes_ano = ?", (periodo_ativo_chave,))
+            funcionarios_mes = cursor.fetchall()
+            
+            for func_f in funcionarios_mes:
+                f_nome, f_tipo, f_valor_base, f_vales = func_f
+                f_valor_base = float(f_valor_base) if f_valor_base else 0.0
+                f_vales = float(f_vales) if f_vales else 0.0
+                
+                # REGRA FIXO: Adiciona o valor base integral abatendo os vales do mês
+                if f_tipo == "Fixo":
+                    total_folha_mes += (f_valor_base - f_vales)
                     
-                    if ":" in tempo_str:
-                        try:
-                            partes = tempo_str.split(":")
-                            # CORREÇÃO CRÍTICA DO MISTÉRIO: Captura as posições [0] e [1] da string
-                            horas_puras = float(partes[0])
-                            minutos_puros = float(partes[1])
-                            # Converte minutos em frações de hora com exatidão decimal
-                            total_horas_dec = horas_puras + (minutos_puros / 60.0)
-                        except Exception as err_partes:
-                            total_horas_dec = 0.0
-                    else:
-                        try:
-                            total_horas_dec = float(tempo_str.replace(",", "."))
-                        except:
-                            total_horas_dec = 0.0
+                # REGRA POR HORA: Busca as horas reais e faz a multiplicação (Se não trabalhou, é R$ 0,00)
+                elif f_tipo == "Por hora":
+                    cursor.execute("SELECT horas_totais FROM registro_ponto_horistas WHERE costureira = ? AND mes_ano = ?", (f_nome, periodo_ativo_chave))
+                    res_ponto = cursor.fetchone()
                     
-                    if total_horas_dec > 0:
-                        # Carimba o nome com as primeiras letras maiúsculas para sincronismo
-                        nome_chave = nome_cru.title().strip()
-                        horas_acumuladas[nome_chave] = total_horas_dec
+                    horas_trabalhadas = float(res_ponto[0]) if res_ponto and res_ponto[0] is not None else 0.0
+                    
+                    # Carga horária multiplicada pelo salário hora estabelecido na lista, abatendo vales
+                    valor_hora_calculado = (f_valor_base * horas_trabalhadas) - f_vales
+                    total_folha_mes += valor_hora_calculado
+            
+            # 4. Soma a Folha Externa vinda dos Serviços Externos Concluídos do mês
+            cursor.execute("SELECT SUM(valor_total) FROM servicos_externos WHERE mes_ano = ?", (periodo_ativo_chave,))
+            res_ext = cursor.fetchone()
+            total_externo_mes = float(res_ext[0]) if res_ext and res_ext[0] is not None else 0.0
+            
+            conn.close()
+
+            # Cálculo automático do Saldo Líquido Real Comercial
+            saldo_liquido_mes = entradas_caixa_mes - saidas_caixa_mes - total_folha_mes - total_externo_mes
+
+            # --- RENDERIZADOR DOS CARDS MASTER SUPREMOS — CENTRALIZAÇÃO ABSOLUTA RECALIBRADA ---
+            c1, c2, c3, c4, c5 = st.columns(5, gap="small")
+            
+            with c1:
+                st.markdown(f"""
+                    <div style='background-color: #2E7D32; padding: 12px 5px; border-radius: 8px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center;'>
+                        <div style='font-size: 13px; font-weight: normal; color: #E8F5E9; opacity: 0.9; display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%;'>💵 Entrada Caixa</div>
+                        <h3 style='margin-top: 6px; margin-bottom: 0px; color: white; font-size: 21px; font-weight: bold; width: 100%; text-align: center;'>R$ {entradas_caixa_mes:,.2f}</h3>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+            with c2:
+                st.markdown(f"""
+                    <div style='background-color: #E65100; padding: 12px 5px; border-radius: 8px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center;'>
+                        <div style='font-size: 13px; font-weight: normal; color: #FFF3E0; opacity: 0.9; display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%;'>🔸 Saídas Gerais</div>
+                        <h3 style='margin-top: 6px; margin-bottom: 0px; color: white; font-size: 21px; font-weight: bold; width: 100%; text-align: center;'>R$ {saidas_caixa_mes:,.2f}</h3>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+            with c3:
+                st.markdown(f"""
+                    <div style='background-color: #C62828; padding: 12px 5px; border-radius: 8px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center;'>
+                        <div style='font-size: 13px; font-weight: normal; color: #FFEBEE; opacity: 0.9; display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%;'>🧱 Folha Interna</div>
+                        <h3 style='margin-top: 6px; margin-bottom: 0px; color: white; font-size: 21px; font-weight: bold; width: 100%; text-align: center;'>R$ {total_folha_mes:,.2f}</h3>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+            with c4:
+                st.markdown(f"""
+                    <div style='background-color: #7B1FA2; padding: 12px 5px; border-radius: 8px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center;'>
+                        <div style='font-size: 13px; font-weight: normal; color: #F3E5F5; opacity: 0.9; display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%;'>📌 Folha Externa</div>
+                        <h3 style='margin-top: 6px; margin-bottom: 0px; color: white; font-size: 21px; font-weight: bold; width: 100%; text-align: center;'>R$ {total_externo_mes:,.2f}</h3>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+            with c5:
+                cor_l = "#1565C0" if saldo_liquido_mes >= 0 else "#B71C1C"
+                st.markdown(f"""
+                    <div style='background-color: {cor_l}; padding: 12px 5px; border-radius: 8px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center;'>
+                        <div style='font-size: 13px; font-weight: normal; color: #E3F2FD; opacity: 0.9; display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%;'>💰 Saldo Líquido</div>
+                        <h3 style='margin-top: 6px; margin-bottom: 0px; color: white; font-size: 21px; font-weight: bold; width: 100%; text-align: center;'>R$ {saldo_liquido_mes:,.2f}</h3>
+                    </div>
+                """, unsafe_allow_html=True)
+
+                # 📊 GRÁFICO MASTER EM TEMPO REAL: FATURAMENTO DE PRODUÇÃO DIÁRIA DA FÁBRICA
+            # ==============================================================================
+            st.markdown("<br><hr>", unsafe_allow_html=True)
+            st.subheader(f"📈 Monitor de Produtividade Diária — Faturamento por Dia ({mes_ativo_txt}/{ano_ativo_txt})")
+            st.write("O gráfico abaixo consolida o valor total bruto produzido pela fábrica dia por dia dentro do mês selecionado:")
+            
+            # 🚀 MOTOR DE VARREDURA CONECTADO À TABELA REAL: Busca direto na tabela oficial de eficiência
+            try:
+                conn_grafico = sqlite3.connect("dlr_confecoes_v3.db")
+                df_dados_producao = pd.read_sql_query(f"""
+                    SELECT data_lancamento, valor_total 
+                    FROM producao_hora_hora 
+                    WHERE mes_ano = '{periodo_ativo_chave}'
+                """, conn_grafico)
+                conn_grafico.close()
+            except:
+                df_dados_producao = pd.DataFrame(columns=['data_lancamento', 'valor_total'])
+
+            # Cria a estrutura base do calendário de 1 a 31 dias para o gráfico nascer perfeito
+            dias_do_mes = [f"{d:02d}" for d in range(1, 32)]
+            valores_por_dia = {dia: 0.0 for dia in dias_do_mes}
+
+            # Aloca os faturamentos reais acumulando por dia correspondente
+            if not df_dados_producao.empty:
+                for _, row_p in df_dados_producao.iterrows():
+                    dt_p = str(row_p['data_lancamento']).strip() # Formato salvo: "05/10/2026"
+                    if len(dt_p) >= 2:
+                        dia_extraido = dt_p[:2] # Pega os dois primeiros caracteres (o dia)
+                        if dia_extraido in valores_por_dia:
+                            valores_por_dia[dia_extraido] += float(row_p['valor_total'] if row_p['valor_total'] else 0.0)
+
+            # Transforma o dicionário na planilha final de leitura visual do Streamlit
+            df_grafico_final = pd.DataFrame({
+                "Dia do Mês": list(valores_por_dia.keys()),
+                "Total Produzido (R$)": list(valores_por_dia.values())
+            }).set_index("Dia do Mês")
+
+            # 🎨 DESENHA O GRÁFICO DE BARRAS TOTALMENTE INTEGRADO COM A SOMA REAL
+            st.bar_chart(df_grafico_final, color="#2E7D32", use_container_width=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            # ==============================================================================
+
+        # ==============================================================================
+        # 👤 SUB-PÁGINA ADMINISTRATIVE: CADASTRAR FUNCIONÁRIO (RETÂNGULOS ROXOS NO TOPO)
+        # ==============================================================================
+        if menu_selecionado == "👥 Funcionários & Vales":
+            st.title("👤 Gestão de Colaboradores — Administração DLR")
+            st.markdown(f"Período de Referência Ativo: **{mes_ativo_txt} de {ano_ativo_txt}**")
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            if "sub_menu_funcionarios" not in st.session_state:
+                st.session_state.sub_menu_funcionarios = "R.F"
+                
+            # --- DESENHO DOS DOIS RETÂNGULOS ROXOS NO TOPO DA TELA (IGUAL À IMAGEM) ---
+            col_sub1, col_sub2, col_sub_esp = st.columns([2.5, 2.5, 5])
+            
+            with col_sub1:
+                if st.session_state.sub_menu_funcionarios == "R.F":
+                    st.markdown("<div style='background-color: #FFFFFF; color: #000000; padding: 10px; border-radius: 6px; font-weight: bold; text-align: center; border: 2px solid #4A154B; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); font-size: 14px;'>📇 Registrar Funcionário (R.F)</div>", unsafe_allow_html=True)
+                else:
+                    if st.button("📇 Registrar Funcionário (R.F)", use_container_width=True, key="btn_sub_rf_v4"):
+                        st.session_state.sub_menu_funcionarios = "R.F"
+                        st.rerun()
                         
-    except Exception as e:
-        print(f"Erro ao processar folha resumida do FA05H: {e}")
-        
-    return horas_acumuladas
+            with col_sub2:
+                if st.session_state.sub_menu_funcionarios == "L.F":
+                    st.markdown("<div style='background-color: #FFFFFF; color: #000000; padding: 10px; border-radius: 6px; font-weight: bold; text-align: center; border: 2px solid #4A154B; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); font-size: 14px;'>📋 Lista de Funcionários (L.F)</div>", unsafe_allow_html=True)
+                else:
+                    if st.button("📋 Lista de Funcionários (L.F)", use_container_width=True, key="btn_sub_lf_v4"):
+                        st.session_state.sub_menu_funcionarios = "L.F"
+                        st.rerun()
 
-# --- INICIALIZAÇÃO DE SEGURANÇA DOS DADOS NO TOPO ---
-if "logado" not in st.session_state:
-    st.session_state.logado = False
-    st.perfil_atual = None
-    st.session_state.usuario_nome = ""
+            st.markdown("<br><hr>", unsafe_allow_html=True)
 
-if "movimentacoes_caixa" not in st.session_state:
-    st.session_state.movimentacoes_caixa = []    
+            # --- INTERFACE INTERNA 1: FORMULÁRIO COM AVISO DE CONFIRMAÇÃO E REATIVADOR (R.F) ---
+            if st.session_state.sub_menu_funcionarios == "R.F":
+                st.subheader("📇 Formulário de Registro")
+                
+                if "clicou_salvar_func" not in st.session_state: st.session_state.clicou_salvar_func = False
+                if "dados_temporarios_func" not in st.session_state: st.session_state.dados_temporarios_func = {}
 
-if "pagina_admin_atual" not in st.session_state:
-    st.session_state.pagina_admin_atual = "🏠 Dashboard Inicial"
+                # CONTROLADOR DO AVISO AMARELO DE CONFIRMAÇÃO DE TELA
+                if st.session_state.clicou_salvar_func:
+                    tmp = st.session_state.dados_temporarios_func
+                    st.warning(f"⚠️ **Aviso de Confirmação:** Tem certeza que deseja registrar **{tmp['nome']}** como **{tmp['cargo']}** com o valor de **R$ {tmp['valor']:.2f}** no cofre de {mes_ativo_txt}?")
+                    
+                    col_c_sim, col_c_nao = st.columns(2)
+                    with col_c_sim:
+                        if st.button("✅ Sim, confirmar e registrar", use_container_width=True, type="primary", key="btn_conf_cad_v4"):
+                            conn = sqlite3.connect("dlr_confecoes_v3.db")
+                            cursor = conn.cursor()
+                            try:
+                                # 1. VERIFICAÇÃO DE HISTÓRICO: Vê se o funcionário já existia arquivado na tabela
+                                cursor.execute("SELECT status_cadastro FROM funcionarios WHERE nome = ?", (tmp['nome'],))
+                                existe_na_base = cursor.fetchone()
+                                
+                                if existe_na_base:
+                                    # Se ele já existia, atualiza os dados e salva a marcação seletiva
+                                    cursor.execute("""
+                                        UPDATE funcionarios 
+                                        SET tipo_pagamento = ?, valor_base = ?, chave_pix = ?, externo = ?, status_cadastro = ?
+                                        WHERE nome = ?
+                                    """, (tmp['pagto'], tmp['valor'], tmp['pix'], tmp['cargo'], tmp['lancar_manual'], tmp['nome']))
+                                else:
+                                    # Se for novo, grava a marcação na coluna de controle
+                                    cursor.execute("""
+                                        INSERT INTO funcionarios (nome, tipo_pagamento, valor_base, chave_pix, externo, status_cadastro) 
+                                        VALUES (?, ?, ?, ?, ?, ?)
+                                    """, (tmp['nome'], tmp['pagto'], tmp['valor'], tmp['pix'], tmp['cargo'], tmp['lancar_manual']))
+                                
+                                # 2. SINCRO DE MESES: Garante a criação ou atualização da linha do mês na folha histórica
+                                cursor.execute("SELECT id FROM historico_folha_pagamento WHERE nome = ? AND mes_ano = ?", (tmp['nome'], periodo_ativo_chave))
+                                if not cursor.fetchone():
+                                    cursor.execute("""
+                                        INSERT INTO historico_folha_pagamento (mes_ano, nome, tipo_pagamento, valor_base, chave_pix, total_vales, status_pagto) 
+                                        VALUES (?, ?, ?, ?, ?, 0.0, 'Pendente')
+                                    """, (periodo_ativo_chave, tmp['nome'], tmp['pagto'], tmp['valor'], tmp['pix']))
+                                else:
+                                    cursor.execute("""
+                                        UPDATE historico_folha_pagamento
+                                        SET tipo_pagamento = ?, valor_base = ?, chave_pix = ?
+                                        WHERE nome = ? AND mes_ano = ?
+                                    """, (tmp['pagto'], tmp['valor'], tmp['pix'], tmp['nome'], periodo_ativo_chave))
+                                
+                                conn.commit()
+                                st.success(f"🎉 Sucesso! Registro de {tmp['nome']} processado e integrado com o cargo de {tmp['cargo']}!")
+                                st.session_state.clicou_salvar_func = False
+                                st.rerun()
+                            except sqlite3.Error as e:
+                                st.error(f"⚠️ Erro técnico operacional no cofre v3: {e}")
+                                st.session_state.clicou_salvar_func = False
+                            finally: 
+                                conn.close()
+                    with col_c_nao:
+                        if st.button("❌ Não, cancelar", use_container_width=True, key="btn_canc_cad_v4"):
+                            st.session_state.clicou_salvar_func = False
+                            st.rerun()
+                            
+                st.markdown("<br>", unsafe_allow_html=True)
 
-if "lotes_gerais" not in st.session_state:
-    st.session_state.lotes_gerais = []
+                # --- FORMULÁRIO PURIFICADO, ALINHADO E SEM DUPLICIDADE ---
+                with st.form(key="form_cadastro_oficial_v4", clear_on_submit=True):
+                    nome_completo = st.text_input("Nome Completo").strip().title()
+                    cargo_sel = st.selectbox("Cargo / Função", ["Costureira", "Manual", "Revisora", "Conferente", "Supervisor(a)", "Entregador"])
+                    forma_pagto = st.selectbox("Tipo de Pagamento", ["Fixo", "Por hora", "Por operação"])
+                    
+                    col_v_b, col_v_e = st.columns(2)
+                    with col_v_b: 
+                        valor_rs = st.number_input("Valor R$", min_value=0.0, step=10.0, format="%.2f")
+                    with col_v_e: 
+                        # Pergunta integrada perfeitamente no formulário original
+                        lancar_manual_input = st.selectbox("Lançar no Manual?", ["Não", "Sim"])
+                        
+                    chave_pix_input = st.text_input("Chave PIX")
+                    btn_salvar_oficial = st.form_submit_button("💾 Salvar Registro na Base")
+                    
+                if btn_salvar_oficial:
+                    if not nome_completo:
+                        st.error("❌ O nome do colaborador é obrigatório!")
+                    else:
+                        # Guarda a resposta na memória temporária para a caixa de aviso ler
+                        st.session_state.dados_temporarios_func = {
+                            "nome": nome_completo, "cargo": cargo_sel, "pagto": forma_pagto, 
+                            "valor": valor_rs, "pix": chave_pix_input, "lancar_manual": lancar_manual_input
+                        }
+                        st.session_state.clicou_salvar_func = True
+                        st.rerun()
 
-if "presencas" not in st.session_state:
-    st.session_state.presencas = []
+                        # --- INTERFACE INTERNA 2: PLANILHA MASTER DE CADASTRO COM AS 5 COLUNAS (L.F) ---
+            elif st.session_state.sub_menu_funcionarios == "L.F":
+                st.subheader(f"📋 Ficha de Colaboradores Ativos — {mes_ativo_txt}/{ano_ativo_txt}")
+                st.write("📖 **Dica do Chefe:** Altere os dados ou apague linhas livremente na tabela abaixo. O sistema salva as alterações e atualizações de forma automática!")
+                
+                btn_clonar_folha = st.button("🔄 Importar Funcionários Ativos do Mês Passado", use_container_width=True, key=f"btn_clonar_fp_{periodo_ativo_chave}")
+                if btn_clonar_folha:
+                    m_atual = int(mes_ativo_num); a_atual = int(ano_ativo_txt)
+                    m_anterior = m_atual - 1; a_anterior = a_atual
+                    if m_anterior == 0: m_anterior = 12; a_anterior -= 1
+                    chave_periodo_anterior = f"{m_anterior:02d}/{a_anterior}"
 
-if "lotes_externos" not in st.session_state:
-    st.session_state.lotes_externos = []
+                    conn = sqlite3.connect("dlr_confecoes_v3.db")
+                    cursor = conn.cursor()
+                    # 🚀 CORREÇÃO DE OURO: Busca todo mundo que não está demitido ou resgata do histórico do mês passado!
+                    cursor.execute("SELECT nome, tipo_pagamento, valor_base, chave_pix FROM funcionarios WHERE status_cadastro != 'Demitido'")
+                    funcionarios_vivos = cursor.fetchall()
+                    
+                    if not funcionarios_vivos:
+                        cursor.execute("SELECT nome, tipo_pagamento, valor_base, chave_pix FROM historico_folha_pagamento WHERE mes_ano = ?", (chave_periodo_anterior,))
+                        funcionarios_vivos = cursor.fetchall()
+                        
+                    for f_vivo in funcionarios_vivos:
+                        v_nome, v_tipo, v_valor, v_pix = f_vivo
+                        cursor.execute("SELECT id FROM historico_folha_pagamento WHERE nome = ? AND mes_ano = ?", (v_nome, periodo_ativo_chave))
+                        if not cursor.fetchone():
+                            cursor.execute("INSERT INTO historico_folha_pagamento (mes_ano, nome, tipo_pagamento, valor_base, chave_pix, total_vales, status_pagto) VALUES (?, ?, ?, ?, ?, 0.0, 'Pendente')", (periodo_ativo_chave, v_nome, v_tipo, v_valor, v_pix))
+                    conn.commit(); conn.close()
+                    st.success("🎉 Lista de colaboradores sincronizada com o mês atual!"); st.rerun()
 
-if "adiantamentos" not in st.session_state:
-    st.session_state.adiantamentos = []
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                # CORREÇÃO DE OURO: Garante que a coluna de controle exista de forma blindada no banco de dados do HD
+                conn = sqlite3.connect("dlr_confecoes_v3.db")
+                cursor = conn.cursor()
+                try: cursor.execute("ALTER TABLE funcionarios ADD COLUMN status_cadastro TEXT DEFAULT 'Não'")
+                except: pass
+                conn.commit()
 
-if "banco_horas_permanente" not in st.session_state:
-    st.session_state.banco_horas_permanente = []
+                # Puxa os dados oficiais do banco de dados fazendo o cruzamento das tabelas
+                df_folha_mes = pd.read_sql_query(f"""
+                    SELECT 
+                        h.id as 'ID_Original', 
+                        h.nome as 'Nome Completo', 
+                        f.externo as 'Cargo / Função',
+                        h.tipo_pagamento as 'Tipo de Pagamento', 
+                        h.valor_base as 'Valor R$', 
+                        h.chave_pix as 'Chave PIX',
+                        COALESCE(f.status_cadastro, 'Não') as 'Lançar no Manual'
+                    FROM historico_folha_pagamento h
+                    LEFT JOIN funcionarios f ON h.nome = f.nome
+                    WHERE h.mes_ano = '{periodo_ativo_chave}'
+                """, conn)
+                conn.close()
 
-if "presencas_ponto" not in st.session_state:
-    st.session_state.presencas_ponto = {}
+                if not df_folha_mes.empty:
+                    # 🚀 RESTAURAÇÃO MASTER: Alinhamento numérico de fábrica compatível com FLOAT (13.50, 1000.00...)
+                    tabela_final_fp = st.data_editor(
+                        df_folha_mes,
+                        column_config={
+                            "ID_Original": None,
+                            "Nome Completo": st.column_config.TextColumn("👤 Nome Completo", width=220, required=True), 
+                            "Cargo / Função": st.column_config.SelectboxColumn("🗂️ Cargo / Função", options=["Costureira", "Manual", "Revisora", "Conferente", "Supervisor(a)", "Entregador"], required=True, width=150), 
+                            "Tipo de Pagamento": st.column_config.SelectboxColumn("⌨️ Tipo de Pagamento", options=["Fixo", "Por hora", "Por operation"], required=True, width=150), 
+                            # 💸 PADRÃO DA MOEDA VOLTOU: Aceita o ponto normal e deixa as células fluidas
+                            "Valor R$": st.column_config.NumberColumn("💰 Valor R$", format="%.2f", min_value=0.0, step=0.50, width=120, required=True), 
+                            "Chave PIX": st.column_config.TextColumn("⚡ Chave PIX", width=160),
+                            "Lançar no Manual": st.column_config.SelectboxColumn("🎛️ Lançar no Manual", options=["Não", "Sim"], required=True, width=140)
+                        },
+                        hide_index=True, use_container_width=True, num_rows="dynamic", key=f"planilha_folha_DL_master_{periodo_ativo_chave}"
+                    )
+                    
+                    chave_cache_fp = f"planilha_folha_DL_master_{periodo_ativo_chave}"
+                    if chave_cache_fp in st.session_state:
+                        mudou_algo = False
+                        conn = sqlite3.connect("dlr_confecoes_v3.db")
+                        cursor = conn.cursor()
+                        
+                        # Monitor de exclusão de linhas por clique no lixo lateral
+                        if st.session_state[chave_cache_fp]["deleted_rows"]:
+                            for idx_l in st.session_state[chave_cache_fp]["deleted_rows"]:
+                                id_reg_h = int(df_folha_mes.iloc[idx_l]["ID_Original"])
+                                n_colab = df_folha_mes.iloc[idx_l]["Nome Completo"]
+                                cursor.execute("DELETE FROM historico_folha_pagamento WHERE id = ?", (id_reg_h,))
+                                cursor.execute("UPDATE funcionarios SET status_cadastro = 'Demitido' WHERE nome = ?", (n_colab,))
+                            mudou_algo = True
+                        
+                        # Monitor de atualizações dinâmicas digitadas diretamente nas células
+                        if st.session_state[chave_cache_fp]["edited_rows"]:
+                            for idx_s, mudancas in st.session_state[chave_cache_fp]["edited_rows"].items():
+                                idx_l = int(idx_s)
+                                id_reg_h = int(df_folha_mes.iloc[idx_l]["ID_Original"])
+                                n_orig = df_folha_mes.iloc[idx_l]["Nome Completo"]
+                                
+                                if "Nome Completo" in mudancas:
+                                    novo_nome = str(mudancas["Nome Completo"]).strip().title()
+                                    cursor.execute("UPDATE historico_folha_pagamento SET nome = ? WHERE id = ?", (novo_nome, id_reg_h))
+                                    cursor.execute("UPDATE funcionarios SET nome = ? WHERE nome = ?", (novo_nome, n_orig))
+                                    n_orig = novo_nome
+                                if "Cargo / Função" in mudancas:
+                                    cursor.execute("UPDATE funcionarios SET externo = ? WHERE nome = ?", (mudancas["Cargo / Função"], n_orig))
+                                if "Tipo de Pagamento" in mudancas:
+                                    cursor.execute("UPDATE historico_folha_pagamento SET tipo_pagamento = ? WHERE id = ?", (mudancas["Tipo de Pagamento"], id_reg_h))
+                                    cursor.execute("UPDATE funcionarios SET tipo_pagamento = ? WHERE nome = ?", (mudancas["Tipo de Pagamento"], n_orig))
+                                if "Valor R$" in mudancas:
+                                    # 🧼 TRATAMENTO DE OURO: Pega o texto (ex: "13,5"), limpa espaços, troca vírgula por ponto e converte para número!
+                                    texto_valor_cru = str(mudancas["Valor R$"]).replace("R$", "").replace(" ", "").replace(",", ".").strip()
+                                    try:
+                                        v_valor_convertido = float(texto_valor_cru)
+                                        cursor.execute("UPDATE historico_folha_pagamento SET valor_base = ? WHERE id = ?", (v_valor_convertido, id_reg_h))
+                                        cursor.execute("UPDATE funcionarios SET valor_base = ? WHERE nome = ?", (v_valor_convertido, n_orig))
+                                    except ValueError:
+                                        st.error("❌ Erro de digitação! Insira apenas números válidos usando vírgula ou ponto.")
+                                if "Chave PIX" in mudancas:
+                                    cursor.execute("UPDATE historico_folha_pagamento SET chave_pix = ? WHERE id = ?", (mudancas["Chave PIX"], id_reg_h))
+                                    cursor.execute("UPDATE funcionarios SET chave_pix = ? WHERE nome = ?", (mudancas["Chave PIX"], n_orig))
+                                if "Lançar no Manual" in mudancas:
+                                    cursor.execute("UPDATE funcionarios SET status_cadastro = ? WHERE nome = ?", (mudancas["Lançar no Manual"], n_orig))
+                            mudou_algo = True
+                            
+                        if mudou_algo: conn.commit(); conn.close(); st.rerun()
+                        else: conn.close()
+                else:
+                    st.info("💡 Nenhuma ficha ativa localizada para este período. Use o botão acima para trazer os ativos!")
 
-if "status_folha_pagamento" not in st.session_state:
-    st.session_state.status_folha_pagamento = {}
-
-# Dicionário mestre de meses posicionado de forma segura no topo
-MESES_NUM_GLOBAL = {
-    "Janeiro": "01", "Fevereiro": "02", "Março": "03", "Abril": "04",
-    "Maio": "05", "Junho": "06", "Julho": "07", "Agosto": "08",
-    "Setembro": "09", "Outubro": "10", "Novembro": "11", "Dezembro": "12"
-}
-
-# --- CADASTRO E RECONHECIMENTO DE FUNCIONÁRIOS DA DLR CONFECÇÕES ---
-if "funcionarios" not in st.session_state:
-    st.session_state.funcionarios = [
-        {"nome": "Maria Silva", "cargo": "Costureira", "pagamento": "Por hora", "valor_hora": 12.00, "externo": "Não", "status_pagamento_mes": "Pendente"},
-        {"nome": "Ana Oliveira", "cargo": "Costureira", "pagamento": "Por operação (peça)", "valor_hora": 0.00, "externo": "Sim", "status_pagamento_mes": "Pendente"},
-        {"nome": "João Santos", "cargo": "Entregador", "pagamento": "Por hora", "valor_hora": 14.00, "externo": "Não", "status_pagamento_mes": "Pendente"}
-    ]
-
-# --- SISTEMA DE LOGIN: USUÁRIOS E SENHAS ---
-USUARIOS = {
-    "admin": {"senha": "204060", "perfil": "admin", "nome": "Administrador"},
-    "conf": {"senha": "2026", "perfil": "conferente", "nome": "Setor de Conferência"},
-    "pro": {"senha": "2233", "perfil": "manual", "nome": "Setor Manual / Production"}
-}
-
-if "producao_hora" not in st.session_state:
-    st.session_state.producao_hora = [
-        {"Costureira": "Maria Silva", "9H": 12, "10H": 15, "11H": 14, "12H": 10, "14H": 15, "15H": 16, "16H": 14, "17H": 11},
-        {"Costureira": "Juana Costa", "9H": 10, "10H": 12, "11H": 11, "12H": 9, "14H": 13, "15H": 14, "16H": 12, "17H": 10}
-    ]
-
-# Dispara a busca automática e sincronização do cofre físico de forma blindada
-try:
-    # 1. Carrega dados estruturais tradicionais
-    carregar_dados_do_banco_para_memoria()
-    
-    # 2. Carrega dados compactos do Super Robô (Sobrepõe e mantém os dados reais do HD)
-    super_robo_carregar_hd_para_memoria()
-    
-    # Sincroniza as horas gravadas no DB com a gaveta ativa do ponto do mês selecionado
-    if "banco_horas_permanente" in st.session_state:
-        for reg_h in st.session_state.banco_horas_permanente:
-            m_atual_conf = MESES_NUM_GLOBAL.get(st.session_state.get("dash_ref_mes_v30", "Setembro"), "09")
-            a_atual_conf = st.session_state.get("dash_ref_ano_v30", "2026")
-            chave_periodo_ponto = f"{m_atual_conf}/{a_atual_conf}"
+        # 🚚 SUB-PÁGINA ADMINISTRATIVE: SERVIÇOS EXTERNOS (RADAR 100% BLINDADO V19)
+        # ==============================================================================
+        if menu_selecionado == "🚚 Serviços Externos":
+            st.title("🚚 Gerenciamento de Serviços Externos")
+            st.markdown(f"Período de Referência Ativo: **{mes_ativo_txt} de {ano_txt_sel if 'ano_txt_sel' in locals() else ano_ativo_txt}**")
+            st.markdown("<br>", unsafe_allow_html=True)
             
-            if reg_h.get("mes_ano") == chave_periodo_ponto:
-                nome_chave_p = reg_h.get("nome", "").strip().title()
-                st.session_state.presencas_ponto[nome_chave_p] = float(reg_h.get("total_horas", 0.0))
-except Exception as e:
-    pass
-# Configuração da página para um visual moderno e amplo
-st.set_page_config(
-    page_title="Sistema DLR - Confecção", 
-    layout="wide", 
-    page_icon="🧵"
-)
+            # --- 🔌 GAVETA DE MEMÓRIA DAS CAIXAS OPERACIONAIS PARA AUTO-LIMPEZA ---
+            if "se_costureira_clean" not in st.session_state: st.session_state.se_costureira_clean = ""
+            if "se_of_clean" not in st.session_state: st.session_state.se_of_clean = "Escolha um OF..."
+            if "se_valor_clean" not in st.session_state: st.session_state.se_valor_clean = 0.0
+            if "se_qtd_clean" not in st.session_state: st.session_state.se_qtd_clean = 1
+            if "se_nome_peca_clean" not in st.session_state: st.session_state.se_nome_peca_clean = ""
 
-# Estilização básica para um visual mais limpo e profissional
-st.markdown("""
-    <style>
-    .block-container {padding-top: 2rem; padding-bottom: 2rem;}
-    h1 {color: #1E3A8A; font-weight: 700;}
-    h2 {color: #2563EB; font-weight: 600;}
-    </style>
-""", unsafe_allow_html=True)
+            # --- MOTOR DE BUSCA EM TEMPO REAL PARA PUXADA AUTOMÁTICA DA REF ---
+            conn = sqlite3.connect("dlr_confecoes_v3.db")
+            cursor = conn.cursor()
+            
+            # Puxa os OFs ativos convertendo para texto limpo para evitar curto-circuito de tipos
+            cursor.execute("SELECT of FROM lotes_gerais WHERE status != 'Concluído' ORDER BY id DESC")
+            lista_ofs_vivos = [str(row[0]).strip() for row in cursor.fetchall() if row]
+            
+            # 🚀 CORREÇÃO DE OURO 1: Se o banco foi resetado, busca as costureiras pela função ou marcação viva sem travar!
+            cursor.execute("SELECT nome FROM funcionarios WHERE status_cadastro = 'Sim' OR externo = 'Costureira'")
+            lista_funcs_ext = [str(row[0]).strip() for row in cursor.fetchall() if row]
+            conn.close()
 
+            # Variável espiã que controla o preenchimento automático da Referência
+            ref_automatica = "Aguardando OF..."
 
+            # --- MOTOR DE RECONHECIMENTO ADAPTATIVO V4 (DESEMPACOTAMENTO DE TUPLA) ---
+            ref_automatica = "Aguardando OF..."
+            of_atual_cache = str(st.session_state.se_of_clean).strip()
 
+            if of_atual_cache and of_atual_cache != "Escolha um OF...":
+                conn = sqlite3.connect("dlr_confecoes_v3.db")
+                cursor = conn.cursor()
+                
+                # 1. Tenta buscar tratando o OF como número inteiro puro (Igual ao seu banco)
+                try:
+                    of_numerico = int(of_atual_cache)
+                    cursor.execute("SELECT referencia FROM lotes_gerais WHERE of = ?", (of_numerico,))
+                    res_busca = cursor.fetchone()
+                except ValueError:
+                    res_busca = None
 
-# --- TELA DE LOGIN CENTRALIZADA ---
-if not st.session_state.logado:
-    # Ajustamos a proporção das colunas para centralizar o conteúdo perfeitamente no meio
-    col_esq, col_centro, col_dir = st.columns(3)
+                # 2. Se não achou como número, tenta buscar comparando como texto puro
+                if not res_busca:
+                    cursor.execute("SELECT referencia FROM lotes_gerais WHERE of = ?", (of_atual_cache,))
+                    res_busca = cursor.fetchone()
+                    
+                conn.close()
+                
+                # 🚀 CORREÇÃO DE OURO 1: Captura a posição [0] para rasgar a tupla e extrair o texto puro do HD!
+                if res_busca and res_busca[0] is not None:
+                    ref_automatica = str(res_busca[0]).strip()
+
+            # --- 🎨 DESENHO DOS CAMPOS EM COLUNAS PERFEITAS E FLUIDAS ---
+            col_se1, col_se2, col_se3 = st.columns(3)
+            with col_se1:
+                costureira_ext_sel = st.selectbox(
+                    "Selecionar Costureira", 
+                    lista_funcs_ext if lista_funcs_ext else ["Nenhuma cadastrada"],
+                    key="se_costureira_clean"
+                )
+            with col_se2:
+                # 🚀 CORREÇÃO DE OURO 2: Removido o key fixo antigo para forçar o Streamlit a atualizar o value em tempo real!
+                st.text_input("Referência da Peça", value=ref_automatica, disabled=True)
+            with col_se3:
+                valor_por_peca = st.number_input("Valor por Peça (R$)", min_value=0.0, step=0.50, format="%.2f", key="se_valor_clean")
+
+            col_se4, col_se5, col_se6 = st.columns(3)
+            with col_se4:
+                of_ext_sel = st.selectbox(
+                    "Selecionar Número do OF", 
+                    ["Escolha um OF..."] + lista_ofs_vivos,
+                    key="se_of_clean"
+                )
+            with col_se5:
+                nome_peca_ext = st.text_input(
+                    "Nome da Peça (ex: Camiseta, Bermuda)", 
+                    placeholder="Digite a descrição da peça...", 
+                    key="se_nome_peca_clean"
+                ).strip().title()
+            with col_se6:
+                qtd_pecas_ext = st.number_input("Quantidade de Peças", min_value=1, step=1, key="se_qtd_clean")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            btn_registrar_ext = st.button("🧵 Registrar Lote Externo", use_container_width=True, key="btn_registrar_servico_externo_v5")
+
+            # 🚀 MOTOR DE GRAVAÇÃO RECONECTADO: Captura o clique do botão e salva fisicamente no banco!
+            if btn_registrar_ext:
+                if of_ext_sel == "Escolha um OF..." or costureira_ext_sel == "Nenhuma cadastrada":
+                    st.error("❌ Operação Recusada! Selecione um Número de OF e uma Costureira válida para salvar!")
+                elif not nome_peca_ext or str(nome_peca_ext).strip() == "":
+                    st.error("❌ Operação Recusada! O campo Nome da Peça é obrigatório!")
+                elif valor_por_peca <= 0 or qtd_pecas_ext <= 0:
+                    st.error("❌ Operação Recusada! O valor por peça e a quantidade devem ser maiores que zero!")
+                else:
+                    data_hoje_se = datetime.datetime.now().strftime("%d/%m/%Y")
+                    valor_total_calculado = valor_por_peca * qtd_pecas_ext
+                    
+                    conn = sqlite3.connect("dlr_confecoes_v3.db")
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO servicos_externos (mes_ano, data_lancamento, costureira, of_numero, referencia_peca, nome_peca, valor_peca, qtd_pecas, valor_total)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (periodo_ativo_chave, data_hoje_se, costureira_ext_sel, of_ext_sel, ref_automatica, nome_peca_ext, valor_por_peca, qtd_pecas_ext, valor_total_calculado))
+                    conn.commit()
+                    conn.close()
+                    
+                    # 🧼 OPERAÇÃO LIMPEZA AUTOMÁTICA BLINDADA: Evita o erro de widget já instanciado!
+                    for chave_limpar in ["se_of_clean", "se_valor_clean", "se_qtd_clean", "se_nome_peca_clean"]:
+                        if chave_limpar in st.session_state:
+                            st.session_state.pop(chave_limpar)
+                            
+                    # Injeta os valores padrão de fábrica limpos no cache de transição
+                    st.session_state.se_of_clean = "Escolha um OF..."
+                    st.session_state.se_valor_clean = 0.0
+                    st.session_state.se_qtd_clean = 1
+                    st.session_state.se_nome_peca_clean = ""
+
+                    st.success(f"🎉 Sucesso! Lote do OF {of_ext_sel} gravado e campos limpos automaticamente!")
+                    st.rerun()
+            # --- INTERFACE INFERIOR: HISTÓRICO DE LANÇAMENTOS COM EDIÇÃO E LIXEIRA V19 ---
+            st.markdown("<br><hr>", unsafe_allow_html=True)
+            st.subheader("📋 Histórico de Lançamentos e Controle de Serviços Externos")
+            
+            col_b_se1, col_b_se2 = st.columns([7, 3])
+            with col_b_se2:
+                termo_busca_se = st.text_input("🔍 Pesquisar por Nome ou OF:", placeholder="Digite o nome ou número...", key=f"busca_se_input_{periodo_ativo_chave}")
+
+            st.markdown("💡 *Dica do Chefe: Dê dois cliques em Nome da Peça, Valor Pç ou Qtd para editar! Use a lixeira abaixo para apagar lançamentos.*")
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            conn = sqlite3.connect("dlr_confecoes_v3.db")
+            df_servicos_brutos = pd.read_sql_query(f"""
+                SELECT 
+                    s.id as 'ID_T',
+                    s.data_lancamento as 'Data',
+                    s.costureira as 'Costureira',
+                    COALESCE(f.chave_pix, 'Sem PIX') as '⚡ Chave PIX',
+                    s.of_numero as 'Nº do OF',
+                    s.referencia_peca as 'Referência',
+                    s.nome_peca as 'Nome da Peça',
+                    s.valor_peca as 'Valor Pç',
+                    s.qtd_pecas as 'Qtd',
+                    s.valor_total as 'Total (R$)'
+                FROM servicos_externos s
+                LEFT JOIN funcionarios f ON s.costureira = f.nome
+                WHERE s.mes_ano = '{periodo_ativo_chave}'
+                ORDER BY s.id DESC
+            """, conn)
+            conn.close()
+
+            if termo_busca_se:
+                termo_b = termo_busca_se.strip().lower()
+                df_servicos_brutos = df_servicos_brutos[
+                    df_servicos_brutos['Costureira'].str.lower().str.contains(termo_b) | 
+                    df_servicos_brutos['Nº do OF'].astype(str).str.lower().str.contains(termo_b)
+                ]
+
+            # --- RENDERIZAÇÃO DA PLANILHA MASTER 100% LIBERADA ---
+            if not df_servicos_brutos.empty:
+                chave_cache_se_tabela = f"tabela_servicos_externos_master_{periodo_ativo_chave}"
+                
+                tabela_editada_se = st.data_editor(
+                    df_servicos_brutos,
+                    column_config={
+                        "ID_T": None,
+                        "Data": st.column_config.TextColumn("Data", width=85, disabled=True),
+                        "Costureira": st.column_config.TextColumn("Costureira", width=140, disabled=True),
+                        "⚡ Chave PIX": st.column_config.TextColumn("⚡ Chave PIX", width=120, disabled=True),
+                        "Nº do OF": st.column_config.TextColumn("Nº do OF", width=75, disabled=True),
+                        "Referência": st.column_config.TextColumn("Referência", width=75, disabled=True),
+                        # 🚀 LIBERADAS: Removido o 'disabled=True' destas três colunas conforme solicitado!
+                        "Nome da Peça": st.column_config.TextColumn("Nome da Peça", width=130),
+                        "Valor Pç": st.column_config.NumberColumn("Valor Pç", format="R$ %.2f", width=90),
+                        "Qtd": st.column_config.NumberColumn("Qtd", format="%d", width=60),
+                        "Total (R$)": st.column_config.NumberColumn("Total (R$)", format="R$ %.2f", width=110, disabled=True)
+                    },
+                    hide_index=True, use_container_width=True, key=chave_cache_se_tabela
+                )
+                
+                # --- MOTOR DE ATUALIZAÇÃO E RECALCULO EM TEMPO REAL ---
+                if chave_cache_se_tabela in st.session_state and st.session_state[chave_cache_se_tabela]["edited_rows"]:
+                    conn = sqlite3.connect("dlr_confecoes_v3.db"); cursor = conn.cursor()
+                    for idx_s, mudancas in st.session_state[chave_cache_se_tabela]["edited_rows"].items():
+                        id_lote_se = int(df_servicos_brutos.iloc[int(idx_s)]["ID_T"])
+                        v_peca_atual = float(df_servicos_brutos.iloc[int(idx_s)]["Valor Pç"])
+                        qtd_atual = int(df_servicos_brutos.iloc[int(idx_s)]["Qtd"])
+                        
+                        if "Nome da Peça" in mudancas:
+                            cursor.execute("UPDATE servicos_externos SET nome_peca = ? WHERE id = ?", (str(mudancas["Nome da Peça"]).strip(), id_lote_se))
+                        if "Valor Pç" in mudancas:
+                            v_peca_atual = float(mudancas["Valor Pç"])
+                            cursor.execute("UPDATE servicos_externos SET valor_peca = ? WHERE id = ?", (v_peca_atual, id_lote_se))
+                        if "Qtd" in mudancas:
+                            qtd_atual = int(mudancas["Qtd"])
+                            cursor.execute("UPDATE servicos_externos SET qtd_pecas = ? WHERE id = ?", (qtd_atual, id_lote_se))
+                            
+                        # Recalcula e salva o valor total com base nas alterações
+                        novo_total = v_peca_atual * qtd_atual
+                        cursor.execute("UPDATE servicos_externos SET valor_total = ? WHERE id = ?", (novo_total, id_lote_se))
+                        
+                    conn.commit(); conn.close(); st.rerun()
+
+                # --- 🗑️ SEÇÃO DE REMOÇÃO SELETIVA DE LOTES EXTERNOS (RODAPÉ) ---
+                st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
+                lista_se_excluir = [f"ID: {r['ID_T']} | {r['Costureira']} - OF: {r['Nº do OF']} ({r['Nome da Peça']})" for _, r in df_servicos_brutos.iterrows()]
+                se_selecionado_excluir = st.selectbox("🗑️ Selecione um Lote Externo para excluir:", ["Selecionar..."] + lista_se_excluir, key=f"lix_se_{periodo_ativo_chave}")
+                
+                if se_selecionado_excluir != "Selecionar...":
+                    id_se_del = int(se_selecionado_excluir.split("|")[0].replace("ID: ", "").strip())
+                    st.warning("⚠️ **Aviso de Segurança:** Tem certeza que deseja apagar permanentemente este serviço externo?")
+                    c_se_d1, c_se_d2 = st.columns(2)
+                    with c_se_d1:
+                        if st.button("✅ Sim, confirmar exclusão", use_container_width=True, type="primary", key="btn_conf_del_se_f"):
+                            conn = sqlite3.connect("dlr_confecoes_v3.db"); cursor = conn.cursor()
+                            cursor.execute("DELETE FROM servicos_externos WHERE id = ?", (id_se_del,))
+                            conn.commit(); conn.close()
+                            if f"lix_se_{periodo_ativo_chave}" in st.session_state:
+                                st.session_state.pop(f"lix_se_{periodo_ativo_chave}")
+                            st.success("Removido com sucesso!"); st.rerun()
+                    with c_se_d2:
+                        if st.button("❌ Não, manter", use_container_width=True, key="btn_canc_del_se_f"):
+                            if f"lix_se_{periodo_ativo_chave}" in st.session_state:
+                                st.session_state.pop(f"lix_se_{periodo_ativo_chave}")
+                            st.rerun()
+            else:
+                st.info("💡 Nenhum lote de serviço externo registrado para este período até o momento.")
+
+        # 💰 SUB-PÁGINA ADMINISTRATIVE: FINANCEIRO GERAL (VERSÃO BLINDADA AUTO-LIMPANTE)
+        # ==============================================================================
+        if menu_selecionado == "💰 Financeiro Geral":
+            st.title("💰 Fluxo de Caixa Dinâmico — Entradas e Saídas")
+            st.markdown("""
+            <style>
+                div[data-testid="stForm"] {
+                    max-width: 650px !important;
+                    margin: 0px auto !important;
+                    padding: 20px !important;
+                }
+            </style>
+        """, unsafe_allow_html=True)
+            st.markdown(f"Período de Referência Active: **{mes_ativo_txt} de {ano_ativo_txt}**")
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Usamos o st.container para que a mudança do selectbox mude a tela em tempo real
+            tipo_mov_sel = st.selectbox(
+                "Tipo de Movimentação", 
+                ["Saída (Geral)", "Entrada", "Saída (Vale de Funcionário)"], 
+                key="tipo_movimentacao_master_v3"
+            )
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # --- ENGENHARIA DE FORMULÁRIO COM LIMPEZA AUTOMÁTICA COMPLETA ---
+            # O clear_on_submit=True limpa TODAS as caixas da tela assim que o botão é clicado!
+            with st.form(key="form_financeiro_clean_definitivo", clear_on_submit=True):
+                
+                # 🚨 SUB-FORMULÁRIO: CASO SEJA VALE DE FUNCIONÁRIO
+                if tipo_mov_sel == "Saída (Vale de Funcionário)":
+                    conn = sqlite3.connect("dlr_confecoes_v3.db")
+                    cursor = conn.cursor()
+                    # 🚀 CORREÇÃO DE OURO INDESTRUTÍVEL: Busca todo mundo que está na folha de pagamentos ativa deste mês!
+                    cursor.execute("SELECT nome FROM historico_folha_pagamento WHERE mes_ano = ? ORDER BY nome ASC", (periodo_ativo_chave,))
+                    
+                    # O row[0] rasga o formato do SQLite e joga o texto puro dos nomes na tela sem parênteses!
+                    lista_funcs_fin = [str(row[0]).strip() for row in cursor.fetchall() if row and row[0] is not None]
+                    conn.close()
+                    
+                    funcionario_vale_sel = st.selectbox("Selecione o Funcionário que pediu o Vale", lista_funcs_fin if lista_funcs_fin else ["Nenhum funcionário ativo cadastrado"])
+                    valor_total_mov = st.number_input("Valor do Vale (R$)", min_value=0.0, step=10.0, format="%.2f")
+                    qtd_parcelas_mov = st.selectbox("Parcelar em quantas vezes? (Limite de 3x para Vales)", [1, 2, 3], index=0)
+                    desc_final_mov = f"Vale Funcionário: {funcionario_vale_sel}"
+                
+                # 🏢 SUB-FORMULÁRIO: CASO SEJA ENTRADA OU SAÍDA GERAL
+                else:
+                    desc_final_mov = st.text_input("Descrição / Motivo da Movimentação (Linha, Luz, Combustível, etc.)").strip()
+                    valor_total_mov = st.number_input("Valor Total (R$)", min_value=0.0, step=10.0, format="%.2f")
+                    qtd_parcelas_mov = st.selectbox("Quantidade de parcelas (Se houver)", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], index=0)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                btn_registrar_caixa = st.form_submit_button("🔮 Registrar no Caixa", use_container_width=True)
+
+            # --- MOTOR DE PROCESSAMENTO DO COFRE v3.db ---
+            if btn_registrar_caixa:
+                if valor_total_mov <= 0:
+                    st.error("❌ O valor informado deve ser maior que R$ 0,00!")
+                elif tipo_mov_sel != "Saída (Vale de Funcionário)" and not desc_final_mov:
+                    st.error("❌ Por favor, digite a descrição do motivo da movimentação!")
+                elif tipo_mov_sel == "Saída (Vale de Funcionário)" and (not lista_funcs_fin or funcionario_vale_sel == "Nenhum funcionário ativo cadastrado"):
+                    st.error("❌ Cadastre colaboradores ativos antes de realizar adiantamentos!")
+                else:
+                    data_hoje_fin = datetime.datetime.now().strftime("%d/%m/%Y")
+                    valor_da_parcela_fin = valor_total_mov / qtd_parcelas_mov
+                    
+                    conn = sqlite3.connect("dlr_confecoes_v3.db")
+                    cursor = conn.cursor()
+                    
+                    m_corrido = int(mes_ativo_num)
+                    a_corrido = int(ano_ativo_txt)
+                    
+                    tipo_banco_salvar = "Vale" if tipo_mov_sel == "Saída (Vale de Funcionário)" else ("Saída" if tipo_mov_sel == "Saída (Geral)" else "Entrada")
+                    
+                    for p_i in range(1, qtd_parcelas_mov + 1):
+                        chave_mes_financeiro = f"{m_corrido:02d}/{a_corrido}"
+                        desc_com_parcela = f"{desc_final_mov} ({p_i}/{qtd_parcelas_mov})" if qtd_parcelas_mov > 1 else desc_final_mov
+                        
+                        cursor.execute("""
+                            INSERT INTO livro_caixa (mes_ano, data_movimento, tipo_movimentacao, descricao, valor_total, parcela_atual, total_parcelas, valor_parcela)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (chave_mes_financeiro, data_hoje_fin, tipo_banco_salvar, desc_com_parcela, valor_total_mov, p_i, qtd_parcelas_mov, valor_da_parcela_fin))
+                        
+                        if tipo_banco_salvar == "Vale":
+                            cursor.execute("""
+                                UPDATE historico_folha_pagamento 
+                                SET total_vales = total_vales + ? 
+                                WHERE nome = ? AND mes_ano = ?
+                            """, (valor_da_parcela_fin, funcionario_vale_sel, chave_mes_financeiro))
+                        
+                        m_corrido += 1
+                        if m_corrido > 12:
+                            m_corrido = 1
+                            a_corrido += 1
+                            
+                    conn.commit()
+                    conn.close()
+                    
+                    # 🎉 Sucesso! O próprio Streamlit já limpou os campos das caixas por causa do clear_on_submit!
+                    st.success(f"🎉 Lançamento de {tipo_banco_salvar} registrado com sucesso!")
+                    st.rerun()
+                    
+
+  # ==============================================================================
+        # 📅 SUB-PÁGINA ADMINISTRATIVE: EXTRATO DO MÊS (VERSÃO LIMPA VINCULADA AO MASTER)
+        # ==============================================================================
+        if menu_selecionado == "📅 Extrato do Mês":
+            st.title("📅 Livro Caixa — Extrato de Todas as Movimentações")
+            
+            # Inicializa o estado de navegação interna dos extratos se não existia no cache
+            if "sub_menu_extratos" not in st.session_state:
+                st.session_state.sub_menu_extratos = "E.G"
+                
+            # CORREÇÃO DE OURO: Puxa diretamente o período ativo selecionado no calendário master global!
+            periodo_ext_chave = periodo_ativo_chave
+            mes_ext_sel = mes_ativo_txt
+            ano_ext_sel = ano_ativo_txt
+            
+            st.markdown(f"Exibindo movimentações cronológicas referentes ao período ativo: **{mes_ext_sel} de {ano_ext_sel}**")
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # --- DESENHO RECALIBRADO EM 4 COLUNAS COMPACTAS E SIMÉTRICAS ---
+            col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+            
+            with col_b1:
+                if st.session_state.sub_menu_extratos == "E.G":
+                    st.markdown("<div style='background-color: #FFFFFF; color: #000000; padding: 10px; border-radius: 6px; font-weight: bold; text-align: center; border: 2px solid #4A154B; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); font-size: 14px;'>📊 Extrato Geral (E.G)</div>", unsafe_allow_html=True)
+                else:
+                    if st.button("📊 Extrato Geral (E.G)", use_container_width=True, key="btn_ext_eg_clean"):
+                        st.session_state.sub_menu_extratos = "E.G"
+                        st.rerun()
+                        
+            with col_b2:
+                if st.session_state.sub_menu_extratos == "E.V":
+                    st.markdown("<div style='background-color: #FFFFFF; color: #000000; padding: 10px; border-radius: 6px; font-weight: bold; text-align: center; border: 2px solid #4A154B; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); font-size: 14px;'>💸 Extrato de Vale (E.V)</div>", unsafe_allow_html=True)
+                else:
+                    if st.button("💸 Extrato de Vale (E.V)", use_container_width=True, key="btn_ext_ev_clean"):
+                        st.session_state.sub_menu_manual_lotes = "A.P" if 'sub_menu_manual_lotes' in st.session_state else "A.P"
+                        st.session_state.sub_menu_extratos = "E.V"
+                        st.rerun()
+                        
+            with col_b3:
+                if st.session_state.sub_menu_extratos == "F.P":
+                    st.markdown("<div style='background-color: #FFFFFF; color: #000000; padding: 10px; border-radius: 6px; font-weight: bold; text-align: center; border: 2px solid #4A154B; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); font-size: 14px;'>📄 Folha de Pag. (F.P)</div>", unsafe_allow_html=True)
+                else:
+                    if st.button("📄 Folha de Pag. (F.P)", use_container_width=True, key="btn_ext_fp_clean"):
+                        st.session_state.sub_menu_extratos = "F.P"
+                        st.rerun()
+
+            with col_b4:
+                # 🚀 NOVO QUARTO BOTÃO NO LOCAL EXATO DO SEU RISCO VERMELHO — PERFEITAMENTE IGUAL AOS OUTROS
+                if st.session_state.sub_menu_extratos == "E.H":
+                    st.markdown("<div style='background-color: #FFFFFF; color: #000000; padding: 10px; border-radius: 6px; font-weight: bold; text-align: center; border: 2px solid #4A154B; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); font-size: 14px;'>⚙️ Eficiência Hora (E.H)</div>", unsafe_allow_html=True)
+                else:
+                    if st.button("⚙️ Eficiência Hora (E.H)", use_container_width=True, key="btn_ext_eh_clean"):
+                        st.session_state.sub_menu_extratos = "E.H"
+                        st.rerun()
+
+                        # ⚙️ SUB-TELA D: ESPELHO DE EFICIÊNCIA HORÁRIA & CADASTRO DE PREÇOS (E.H)
+            # ==============================================================================
+            if st.session_state.sub_menu_extratos == "E.H":
+                st.markdown(f"### 📋 Espelho de Produção Horária — {mes_ext_sel}/{ano_ext_sel}")
+                
+                # --- 🛠️ SEÇÃO A: TABELA DE CADASTRO DE OPERAÇÕES E VALORES (PARA O MANUAL LER) ---
+                st.markdown("##### ⚙️ Tabela de Preços por Operação (Fábrica)")
+                st.write("Insira ou altere o preço pago por cada operação. O Setor Manual lerá estes dados automaticamente:")
+                
+                conn = sqlite3.connect("dlr_confecoes_v3.db")
+                cursor = conn.cursor()
+                # Garante que a tabela de cadastro de preços exista de forma blindada
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS operacoes_frente (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                        nome_operacao TEXT UNIQUE, 
+                        preco_peca REAL
+                    )
+                """)
+                conn.commit()
+                
+                # Lê os preços salvos para jogar no editor
+                df_tabela_precos = pd.read_sql_query("SELECT id as 'ID_O', nome_operacao as 'Tipo de Operação', preco_peca as 'Preço por Peça (R$)' FROM operacoes_frente", conn)
+                conn.close()
+                
+                # Editor dinâmico espremido de parede a parede que aceita adicionar e deletar linhas
+                chave_tabela_precos_op = "editor_precos_operacoes_master_v3"
+                tabela_precos_editada = st.data_editor(
+                    df_tabela_precos,
+                    column_config={
+                        "ID_O": None, # Oculta o ID técnico
+                        "Tipo de Operação": st.column_config.TextColumn("Tipo de Operação (ex: Cós, Pré, Elástico)", width=250, required=True),
+                        "Preço por Peça (R$)": st.column_config.NumberColumn("Preço por Peça", format="R$ %.2f", min_value=0.0, step=0.05, width=150, required=True)
+                    },
+                    hide_index=True,
+                    num_rows="dynamic", # Ativa os botões nativos de "Adicionar Linha" e o "Lixinho" de deletar na lateral!
+                    use_container_width=True,
+                    key=chave_tabela_precos_op
+                )
+                
+                # MOTOR DE GRAVAÇÃO AUTOMÁTICA DE PREÇOS NO COFRE V3
+                if chave_tabela_precos_op in st.session_state:
+                    mudancas_op = st.session_state[chave_tabela_precos_op]
+                    if mudancas_op["edited_rows"] or mudancas_op["added_rows"] or mudancas_op["deleted_rows"]:
+                        conn = sqlite3.connect("dlr_confecoes_v3.db")
+                        cursor = conn.cursor()
+                        
+                        # Caso 1: Novas linhas adicionadas na planilha
+                        for nova_linha in mudancas_op["added_rows"]:
+                            if "Tipo de Operação" in nova_linha and "Preço por Peça (R$)" in nova_linha:
+                                nome_n = str(nova_linha["Tipo de Operação"]).strip().title()
+                                preco_n = float(nova_linha["Preço por Peça (R$)"])
+                                if nome_n:
+                                    cursor.execute("INSERT OR REPLACE INTO operacoes_frente (nome_operacao, preco_peca) VALUES (?, ?)", (nome_n, preco_n))
+                        
+                        # Caso 2: Linhas editadas direto na célula
+                        for idx_s, mudou_celula in mudancas_op["edited_rows"].items():
+                            id_banco_op = int(df_tabela_precos.iloc[int(idx_s)]["ID_O"])
+                            if "Tipo de Operação" in mudou_celula:
+                                cursor.execute("UPDATE operacoes_frente SET nome_operacao = ? WHERE id = ?", (str(mudou_celula["Tipo de Operação"]).strip().title(), id_banco_op))
+                            if "Preço por Peça (R$)" in mudou_celula:
+                                cursor.execute("UPDATE operacoes_frente SET preco_peca = ? WHERE id = ?", (float(mudou_celula["Preço por Peça (R$)"]), id_banco_op))
+                        
+                        # Caso 3: Linhas deletadas pelo botão de lixo do Streamlit
+                        for idx_del in mudancas_op["deleted_rows"]:
+                            id_banco_del = int(df_tabela_precos.iloc[int(idx_del)]["ID_O"])
+                            cursor.execute("DELETE FROM operacoes_frente WHERE id = ?", (id_banco_del,))
+                            
+                        conn.commit()
+                        conn.close()
+                        st.rerun()
+
+                st.markdown("<br><hr style='border-top: 1px dashed #424242;'><br>", unsafe_allow_html=True)
+                
+                # --- 📊 SEÇÃO B RECALIBRADA: FILTRO EXCLUSIVO POR NÚMERO DO DIA ---
+                st.markdown("##### 🧾 Comprovantes de Produção Diária (Eficiência)")
+                st.write("Selecione o dia do mês corrente para isolar o cupom fiscal de produção:")
+                
+                # 🚀 NOVO SELETOR CIRÚRGICO: Cria uma lista limpa do dia 1 ao dia 31 para o chefe clicar
+                lista_dias_mes = [str(d) for d in range(1, 32)]
+                
+                # Tenta capturar o número do dia de hoje para já vir pré-selecionado por padrão de fábrica
+                dia_hoje_padrao = str(datetime.datetime.now().day)
+                
+                # Lista de dias do 1 ao 31
+                lista_dias_mes = [str(d) for d in range(1, 32)]
+                dia_hoje_padrao = str(datetime.datetime.now().day)
+                
+                # Monta a máscara de data exata (ex: "05/10/2026")
+                # Inicializa a variável para garantir leitura antes de desenhar o card
+                if 'dia_selecionado' not in st.session_state:
+                    st.session_state.dia_selecionado_val = dia_hoje_padrao
+                
+                # --- ⚙️ MOTOR ANTECIPADO DE CÁLCULO DO TOTAL DO DIA ---
+                # Criamos a busca antes para alimentar o número grande dentro do card
+                dia_provisorio = st.session_state.get(f"filtro_dia_puro_eh_{periodo_ext_chave}", dia_hoje_padrao)
+                data_busca_formatada = f"{int(dia_provisorio):02d}/{periodo_ext_chave}"
+                
+                conn = sqlite3.connect("dlr_confecoes_v3.db")
+                df_calculo_card = pd.read_sql_query(f"SELECT valor_total FROM producao_hora_hora WHERE mes_ano = '{periodo_ext_chave}' AND data_lancamento = '{data_busca_formatada}'", conn)
+                conn.close()
+                
+                # Soma tudo o que foi gerado por todas as costureiras nessa data específica
+                faturamento_bruto_dia = float(df_calculo_card["valor_total"].sum()) if not df_calculo_card.empty else 0.0
+
+                # --- 🎨 DESENHO DO FILTRO E DO CARD TOTAL COM TAMANHO MANUAL REDUZIDO ---
+                # Adicionada a terceira coluna (col_respiro_vazio) com peso 5 para segurar o tamanho!
+                col_dia_puro, col_card_total, col_respiro_vazio = st.columns([2.5, 2.5, 5])
+                
+                with col_dia_puro:
+                    dia_selecionado = st.selectbox(
+                        "📅 Selecionar Dia do Mês:", 
+                        lista_dias_mes, 
+                        index=lista_dias_mes.index(dia_hoje_padrao),
+                        key=f"filtro_dia_puro_eh_{periodo_ext_chave}"
+                    )
+                    # Força a atualização do formato caso mude o clique
+                    data_busca_formatada = f"{int(dia_selecionado):02d}/{periodo_ext_chave}"
+                
+                with col_card_total:
+                    # 🚀 CORREÇÃO DE OURO: Adicionado max-width: 260px para encolher o card manualmente na tela!
+                    st.markdown(f"""
+                        <div style='background-color: #2E7D32; padding: 12px 15px; border-radius: 8px; color: white; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; height: 78px; margin-top: 24px; max-width: 260px;'>
+                            <div style='font-size: 12px; font-weight: normal; color: #C8E6C9; opacity: 0.9; font-family: sans-serif; white-space: nowrap;'>💰 Total Produzido no Dia ({data_busca_formatada})</div>
+                            <h3 style='margin: 2px 0 0 0; color: white; font-size: 24px; font-weight: bold; font-family: sans-serif;'>R$ {faturamento_bruto_dia:,.2f}</h3>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                st.markdown("<div style='margin-top: 20px;'></div>", unsafe_allow_html=True)
+                
+                # --- RADAR DE EXIBIÇÃO DO HISTÓRICO ATUALIZADO ---
+                conn = sqlite3.connect("dlr_confecoes_v3.db")
+                df_eh = pd.read_sql_query(f"SELECT costureira, operacao, qtd_pecas, valor_total FROM producao_hora_hora WHERE mes_ano = '{periodo_ext_chave}' AND data_lancamento = '{data_busca_formatada}'", conn)
+                conn.close()
+                
+                if not df_eh.empty:
+                    lista_costureiras_com_producao = df_eh["costureira"].unique()
+                    
+                    for cost_nome in lista_costureiras_com_producao:
+                        df_filtro_cost = df_eh[df_eh["costureira"] == cost_nome]
+                        
+                        st.markdown(f"""
+                            <div style='background-color: #212121; padding: 18px; border-radius: 8px; border-left: 5px solid #4A154B; max-width: 550px; margin-bottom: 25px; font-family: monospace; box-shadow: 2px 2px 8px rgba(0,0,0,0.2);'>
+                                <h4 style='color: #E040FB; margin: 0 0 12px 0; font-family: sans-serif; font-size: 15px;'>📇 COMPROVANTE DE PRODUÇÃO ACUMULADA</h4>
+                                <div style='font-size: 13px; color: #CFD8DC; line-height: 1.6;'>
+                                    <b>COLABORADORA:</b> {str(cost_nome).upper()}<br>
+                                    <b>COMPETÊNCIA:</b> {mes_ext_sel} de {ano_ext_sel}<br>
+                                    <span style='color: #69F0AE;'><b>DATA DO EXTRATO:</b> {data_busca_formatada}</span>
+                                </div>
+                                <hr style='border: 0; border-top: 1px dashed #555555; margin: 12px 0;'>
+                        """, unsafe_allow_html=True)
+                        
+                        total_pecas_acumulada = 0
+                        total_reais_produzido = 0.0
+                        
+                        for _, row_cupom in df_filtro_cost.iterrows():
+                            qtd_p = int(row_cupom['qtd_pecas'])
+                            val_t = float(row_cupom['valor_total'])
+                            total_pecas_acumulada += qtd_p
+                            total_reais_produzido += val_t
+                            
+                            st.markdown(f"""
+                                <div style='display: flex; justify-content: space-between; font-size: 13px; color: #ECEFF1; margin-bottom: 4px;'>
+                                    <span>🪡 {row_cupom['operacao']} (x{qtd_p})</span>
+                                    <span>R$ {val_t:,.2f}</span>
+                                </div>
+                            """, unsafe_allow_html=True)
+                            
+                        st.markdown(f"""
+                                <hr style='border: 0; border-top: 1px dashed #555555; margin: 12px 0;'>
+                                <div style='display: flex; justify-content: space-between; font-weight: bold; font-size: 15px; color: #FFFFFF;'>
+                                    <span>💰 VALOR TOTAL PRODUZIDO:</span>
+                                    <span style='color: #69F0AE;'>R$ {total_reais_produzido:,.2f}</span>
+                                </div>
+                                <div style='font-size: 11px; color: #90A4AE; margin-top: 6px;'>Volume de peças processadas no dia: {total_pecas_acumulada} unidades</div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.info(f"💡 Nenhum registro de eficiência horária localizado para o dia {data_busca_formatada} neste período.")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+# ==============================================================================
+            # 📊 OPÇÃO 1: VISUALIZANDO EXTRATO GERAL (E.G) — VALOR TOTAL SÓ NO PRIMEIRO MÊS
+            # ==============================================================================
+            if st.session_state.sub_menu_extratos == "E.G":
+                st.subheader(f"📂 Visualizando: Extrato Geral ({mes_ext_sel}/{ano_ext_sel})")
+                
+                conn = sqlite3.connect("dlr_confecoes_v3.db")
+                # CORREÇÃO DE OURO: Trocado 'libro_caixa' para 'livro_caixa' (com V)
+                df_eg = pd.read_sql_query(f"""
+                    SELECT id as 'ID_T', data_movimento as 'Data', descricao as 'Descrição', tipo_movimentacao, valor_total, parcela_atual, valor_parcela
+                    FROM livro_caixa 
+                    WHERE mes_ano = '{periodo_ext_chave}'
+                """, conn)
+                conn.close()
+                
+                if not df_eg.empty:
+                    linhas_eg_filtradas = []
+                    for idx_eg, row_eg in df_eg.iterrows():
+                        tipo_m = row_eg['tipo_movimentacao']
+                        parc_atual = int(row_eg['parcela_atual'])
+                        
+                        # REGRA DE OURO: Se for Vale, só exibe no Extrato Geral se for a parcela 1 (mês de origem)
+                        if tipo_m == "Vale":
+                            if parc_atual == 1:
+                                v_exibir = f"- R$ {float(row_eg['valor_total']):,.2f}"
+                                lines_eg_f = {"Data": row_eg['Data'], "Descrição": row_eg['Descrição'], "Valor": v_exibir}
+                                linhas_eg_filtradas.append(lines_eg_f)
+                        else:
+                            v_exibir = f"- R$ {float(row_eg['valor_parcela']):,.2f}" if tipo_m == "Saída" else f"+ R$ {float(row_eg['valor_parcela']):,.2f}"
+                            linhas_eg_filtradas.append({"Data": row_eg['Data'], "Descrição": row_eg['Descrição'], "Valor": v_exibir})
+                    
+                    if linhas_eg_filtradas:
+                        df_eg_final = pd.DataFrame(linhas_eg_filtradas)
+                        
+                        # 🚀 PLANILHA MASTER 100% LIBERADA: Mudamos para disabled=False para você conseguir editar!
+                        tabela_editada_eg = st.data_editor(
+                            df_eg_final,
+                            column_config={
+                                "Data": st.column_config.TextColumn("Data", width=120, disabled=True),
+                                "Descrição": st.column_config.TextColumn("Descrição", width=480, disabled=False), # <=== LIBERADO!
+                                "Valor": st.column_config.TextColumn("Valor", width=150, disabled=False)         # <=== LIBERADO!
+                            },
+                            hide_index=True, use_container_width=True, key=f"tab_extrato_eg_view_{periodo_ext_chave}"
+                        )
+                        
+                        # 💾 MOTOR DE SALVAMENTO INTELIGENTE: Pega o que você digitou e atualiza o banco de dados
+                        chave_cache_eg = f"tab_extrato_eg_view_{periodo_ext_chave}"
+                        if chave_cache_eg in st.session_state and st.session_state[chave_cache_eg]["edited_rows"]:
+                            conn = sqlite3.connect("dlr_confecoes_v3.db")
+                            cursor = conn.cursor()
+                            for idx_s, mudancas in st.session_state[chave_cache_eg]["edited_rows"].items():
+                                # Descobre o ID real da linha do banco usando o DataFrame bruto de cima
+                                id_reg_eg = int(df_eg.iloc[int(idx_s)]['ID_T'])
+                                tipo_mov_original = str(df_eg.iloc[int(idx_s)]['tipo_movimentacao']).strip()
+                                
+                                if "Descrição" in mudancas:
+                                    cursor.execute("UPDATE livro_caixa SET descricao = ? WHERE id = ?", (str(mudancas["Descrição"]).strip(), id_reg_eg))
+                                
+                                if "Valor" in mudancas:
+                                    # Limpa os sinais de R$, espaços e converte pontos/vírgulas para número real puro
+                                    valor_limpo = str(mudancas["Valor"]).replace("R$", "").replace(" ", "").replace("-", "").replace("+", "").replace(",", ".").strip()
+                                    try:
+                                        v_float = float(valor_limpo)
+                                        # Se for um vale de parcela 1, atualiza a coluna valor_total, senão atualiza a valor_parcela
+                                        if tipo_mov_original == "Vale":
+                                            cursor.execute("UPDATE livro_caixa SET valor_total = ? WHERE id = ?", (v_float, id_reg_eg))
+                                        else:
+                                            cursor.execute("UPDATE livro_caixa SET valor_parcela = ? WHERE id = ?", (v_float, id_reg_eg))
+                                    except ValueError:
+                                        pass
+                            conn.commit()
+                            conn.close()
+                            st.rerun()
+                else:
+                    st.info(f"💡 Nenhuma movimentação registrada no Extrato Geral em {periodo_ext_chave}.")
+
+            # ==============================================================================
+            # 💸 OPÇÃO 2: VISUALIZANDO EXTRATO DE VALE (E.V) — COM BOTÃO DE CANCELAR VALE
+            # ==============================================================================
+            elif st.session_state.sub_menu_extratos == "E.V":
+                st.subheader(f"📂 Visualizando: Extrato de Vales ({mes_ext_sel}/{ano_ext_sel})")
+                
+                conn = sqlite3.connect("dlr_confecoes_v3.db")
+                # CORREÇÃO DE OURO 1: Trocado de 'libro_caixa' para 'livro_caixa' (com V)
+                df_ev = pd.read_sql_query(f"""
+                    SELECT id as 'ID_T', data_movimento as 'Data', descricao as 'Descrição', valor_parcela as 'Valor do Vale'
+                    FROM livro_caixa 
+                    WHERE mes_ano = '{periodo_ext_chave}' AND tipo_movimentacao = 'Vale'
+                """, conn)
+                conn.close()
+                
+                if not df_ev.empty:
+                    df_ev_copy = df_ev.copy()
+                    df_ev_copy['Valor do Vale'] = df_ev_copy['Valor do Vale'].apply(lambda x: f"- R$ {float(x):,.2f}")
+                    
+                    st.data_editor(
+                        df_ev_copy[['Data', 'Descrição', 'Valor do Vale']],
+                        column_config={
+                            "Data": st.column_config.TextColumn("Data", width=120, disabled=True),
+                            "Descrição": st.column_config.TextColumn("Funcionário / Parcelamento", width=480, disabled=True),
+                            "Valor do Vale": st.column_config.TextColumn("Valor da Parcela", width=150, disabled=True)
+                        },
+                        hide_index=True, use_container_width=True, key=f"tab_extrato_ev_view_{periodo_ext_chave}"
+                    )
+                    
+                    # --- ❌ SEÇÃO DE CANCELAMENTO OFICIAL DE VALES ---
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    lista_vales_cancelar = {f"{row['Descrição']} (Ref ID: {row['ID_T']})": row['ID_T'] for idx, row in df_ev.iterrows()}
+                    
+                    vale_sel_cancelar = st.selectbox("❌ Cancelar / Estornar Vale do Mês:", ["Selecionar vale para cancelar..."] + list(lista_vales_cancelar.keys()))
+                    
+                    if vale_sel_cancelar != "Selecionar vale para cancelar...":
+                        id_vale_del = lista_vales_cancelar[vale_sel_cancelar]
+                        st.warning(f"⚠️ **Aviso de Cancelamento:** Deseja estornar e cancelar permanentemente este lançamento de vale do cofre?")
+                        
+                        col_c_v_s, col_c_v_n = st.columns(2)
+                        with col_c_v_s:
+                            if st.button("✅ Confirmar Cancelamento", use_container_width=True, type="primary"):
+                                conn = sqlite3.connect("dlr_confecoes_v3.db")
+                                cursor = conn.cursor()
+                                # CORREÇÃO DE OURO 2: Trocado de 'libro_caixa' para 'livro_caixa'
+                                cursor.execute("SELECT descricao, valor_parcela FROM livro_caixa WHERE id = ?", (id_vale_del,))
+                                info_v = cursor.fetchone()
+                                if info_v:
+                                    desc_v, v_parc = info_v
+                                    nome_f_limpo = desc_v.replace("Vale Funcionário: ", "").split("(")[0].strip()
+                                    cursor.execute("UPDATE historico_folha_pagamento SET total_vales = MAX(0.0, total_vales - ?) WHERE nome = ? AND mes_ano = ?", (v_parc, nome_f_limpo, periodo_ext_chave))
+                                
+                                # CORREÇÃO DE OURO 3: Trocado de 'libro_caixa' para 'livro_caixa'
+                                cursor.execute("DELETE FROM livro_caixa WHERE id = ?", (id_vale_del,))
+                                conn.commit(); conn.close()
+                                st.success("🎉 Vale cancelado e estornado da folha com sucesso!")
+                                st.rerun()
+                        with col_c_v_n:
+                            if st.button("❌ Manter Vale Ativo", use_container_width=True): st.rerun()
+                else:
+                    st.info(f"💡 Nenhum adiantamento ou vale registrado em {periodo_ext_chave}.")
+
+            # ==============================================================================
+            # 📄 OPÇÃO 3: FOLHA DE PAGAMENTO (F.P) — INTEGRAÇÃO DEFINITIVA DO LIVRO CAIXA V3
+            # ==============================================================================
+            elif st.session_state.sub_menu_extratos == "F.P":
+                st.markdown(f"### 📂 Visualizando: Espelho de Folha de Pagamentos ({mes_ext_sel}/{ano_ext_sel})")
+                st.write("Abaixo está o fechamento financeiro do mês com cálculo automático de horas e desconto de vales:")
+                st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+                
+                conn = sqlite3.connect("dlr_confecoes_v3.db")
+                # Puxa as informações base da folha histórica das colaboradoras
+                df_folha_bruta = pd.read_sql_query(f"SELECT id, nome as 'Funcionário', tipo_pagamento as 'Tipo', valor_base as 'Base (R$)', status_pagto as 'Status' FROM historico_folha_pagamento WHERE mes_ano = '{periodo_ext_chave}'", conn)
+                
+                linhas_folha_calculada = []
+                
+                if not df_folha_bruta.empty:
+                    cursor = conn.cursor()
+                    for idx, row_f in df_folha_bruta.iterrows():
+                        f_id = int(row_f["id"])
+                        f_nome = str(row_f["Funcionário"]).strip()
+                        f_tipo = str(row_f["Tipo"]).strip()
+                        f_base = float(row_f["Base (R$)"])
+                        f_status = str(row_f["Status"]).strip()
+                        
+                         # 🚀 MOTOR DE DESCONTO SINCRONIZADO: Busca rigorosamente por tipo_movimentacao = 'Vale'
+                        nome_busca_minusculo = f"%{f_nome.lower()}%"
+                        
+                        cursor.execute("""
+                            SELECT SUM(valor_parcela) 
+                            FROM livro_caixa 
+                            WHERE mes_ano = ? 
+                              AND tipo_movimentacao = 'Vale' 
+                              AND LOWER(descricao) LIKE ?
+                        """, (periodo_ext_chave, nome_busca_minusculo))
+                        res_vales_cx = cursor.fetchone()
+                        
+                        # 🚀 DESEMPACOTAÇÃO SEGURA: Rasga a tupla do SQLite pegando a posição [0] com tratamento de nulos
+                        f_vales = float(res_vales_cx[0]) if res_vales_cx and res_vales_cx[0] is not None else 0.0
+                        
+                        # ⚙️ ENGENHARIA DE CÁLCULO FINANCEIRO
+                        if f_tipo == "Por hora":
+                            # Busca as horas reais registradas no Importar Ponto
+                            cursor.execute("SELECT horas_totais FROM registro_ponto_horistas WHERE costureira = ? AND mes_ano = ?", (f_nome, periodo_ext_chave))
+                            res_pt = cursor.fetchone()
+                            horas_reais = float(res_pt[0]) if res_pt and res_pt[0] is not None else 0.0
+                            f_liquido = (f_base * horas_reais) - f_vales
+                        else:
+                            # Funcionários Fixos e por Operação: Salário Base - Vales coletados
+                            f_liquido = f_base - f_vales
+                            
+                        if f_liquido < 0: f_liquido = 0.0
+                        
+                        linhas_folha_calculada.append({
+                            "ID_FP": f_id, "Funcionário": f_nome, "Tipo": f_tipo,
+                            "Base (R$)": f_base, "Vales (R$)": f_vales, "Líquido (R$)": f_liquido, "Status": f_status
+                        })
+                    cursor.close()
+                conn.close()
+
+                # --- INTERFACE DE EXIBIÇÃO EM TABELA COMPACTA ---
+                if linhas_folha_calculada:
+                    df_fp_calculado = pd.DataFrame(linhas_folha_calculada)
+                    chave_cache_ext_fp = f"tabela_folha_pagto_extrato_v4_{periodo_ext_chave}"
+                    
+                    st.data_editor(
+                        df_fp_calculado,
+                        column_config={
+                            "ID_FP": None,
+                            "Funcionário": st.column_config.TextColumn("👤 Funcionário", width=180, disabled=True),
+                            "Tipo": st.column_config.TextColumn("🗂️ Tipo", width=100, disabled=True),
+                            "Base (R$)": st.column_config.NumberColumn("💰 Base (R$)", format="R$ %.2f", width=110, disabled=True),
+                            "Vales (R$)": st.column_config.NumberColumn("📉 Vales (R$)", format="R$ %.2f", width=110, disabled=True),
+                            "Líquido (R$)": st.column_config.NumberColumn("💵 Líquido (R$)", format="R$ %.2f", width=120, disabled=True),
+                            "Status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Pago"], required=True, width=110)
+                        },
+                        hide_index=True, use_container_width=True, key=chave_cache_ext_fp
+                    )
+                    
+                    # Salva alterações de Status (Pendente / Pago) de forma automática
+                    if chave_cache_ext_fp in st.session_state and st.session_state[chave_cache_ext_fp]["edited_rows"]:
+                        conn = sqlite3.connect("dlr_confecoes_v3.db"); cursor = conn.cursor()
+                        for idx_s, mudancas in st.session_state[chave_cache_ext_fp]["edited_rows"].items():
+                            id_reg_fp = int(df_fp_calculado.iloc[int(idx_s)]["ID_FP"])
+                            if "Status" in mudancas:
+                                cursor.execute("UPDATE historico_folha_pagamento SET status_pagto = ? WHERE id = ?", (mudancas["Status"], id_reg_fp))
+                        conn.commit(); conn.close(); st.rerun()
+                else:
+                    st.info("💡 Nenhuma movimentação de folha localizada para o período selecionado.")              
+    # ==============================================================================
+# 🚪 RECONECTOR MASTER DLR — LOGOUT DA PORTA DO ADMIN E ENTRADA DA FÁBRICA
+# ==============================================================================
+# Encostado na parede esquerda (zero espaços)! Isso fecha a gaveta do Admin e abre a do Manual!
+if st.session_state.sistema_autorizado and st.session_state.perfil_usuario == "Manual":
+    menu_manual_ativo = st.session_state.pagina_manual_atual
     
-    with col_centro:
-        # NOVO: Injeta o comando CSS para forçar a imagem a ficar centralizada no meio da coluna
+    # 📦 INTERFACE 1: ENTRADA DE LOTES (FORNECEDOR) — PROPORÇÃO COMPACTA FIEL AO PRINT
+    if menu_manual_ativo == "📦 Entrada de Lotes (Fornecedor)":
+        if "sub_menu_manual_lotes" not in st.session_state:
+            st.session_state.sub_menu_manual_lotes = "A.P"
+            
+        # CSS Master local: joga o conteúdo para baixo (alinhado à lateral) e limita a largura máxima
         st.markdown("""
             <style>
-            div[data-testid="stImage"] {
-                display: flex;
-                justify-content: center;
-            }
+                .stMainBlockContainer {
+                    padding-top: 65px !important;
+                }
+                h1, h3 {
+                    font-size: 24px !important;
+                    margin-bottom: 12px !important;
+                }
+                /* Trava os 4 cards para ficarem curtos na horizontal e não esticarem feito chiclete */
+                .bloco-cards-curtos {
+                    max-width: 820px !important;
+                    margin: 0px !important;
+                }
+            </style>
+        """, unsafe_allow_html=True)
+            
+        # --- 📄 RETÂNGULOS DO TOPO COM ORDENS INVERTIDAS (A.P PRIMEIRO, C.L SEGUNDO) ---
+        col_sm_m1, col_sm_m2, col_sm_esp = st.columns([2.0, 2.0, 6])
+        
+        with col_sm_m1:
+            # AGORA O ANDAMENTO DE PRODUÇÃO FICA NA PRIMEIRA POSIÇÃO DA ESQUERDA
+            if st.button("📈 Andamento de Produção (A.P)", use_container_width=True, key="btn_sub_ap_manual_final_v2_inv"):
+                st.session_state.sub_menu_manual_lotes = "A.P"
+                st.rerun()
+                
+        with col_sm_m2:
+            # O CADASTRAR LOTE PASSA PARA A SEGUNDA POSIÇÃO
+            if st.button("📄 Cadastrar Lote (C.L)", use_container_width=True, key="btn_sub_cl_manual_final_v2_inv"):
+                st.session_state.sub_menu_manual_lotes = "C.L"
+                st.rerun()
+
+        st.markdown("<hr style='margin-top: 5px; margin-bottom: 15px; border: 0; border-top: 1px solid #424242;'>", unsafe_allow_html=True)
+
+        # ==============================================================================
+        # 📄 SUB-TELA A: CADASTRO E RECEPÇÃO DE NOVOS LOTES DE TECIDO (C.L) — LARGURA LIBERADA
+        # ==============================================================================
+        if st.session_state.sub_menu_manual_lotes == "C.L":
+            # 🚀 INJEÇÃO MÁGICA: Destranca a largura máxima apenas para este formulário de trabalho!
+            st.markdown("""
+                <style>
+                    div[data-testid="stForm"] {
+                        max-width: 100% !important;
+                        margin: 0px !important;
+                        padding: 20px !important;
+                    }
+                </style>
+            """, unsafe_allow_html=True)
+
+            st.markdown("<h3 style='margin:0; padding:0;'>📦 Cadastro e Recepção de Novos Lotes</h3>", unsafe_allow_html=True)
+            st.write("Preencha os dados da nota do fornecedor para dar entrada oficial na matéria-prima:")
+            
+            with st.form(key="form_cadastro_lotes_manual_clean_v5", clear_on_submit=True):
+                fornecedor_input = st.text_input("Nome do Fornecedor / Marca").strip()
+                of_input = st.text_input("Número da O.F (Ordem de Fabricação)").strip()
+                referencia_input = st.text_input("Referência do Modelo (Peça)").strip()
+                
+                # --- LINHA DE COMPONENTES 1: QUANTIDADES E VALORES ---
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    qtd_input = st.number_input("Qtd na Nota", min_value=1, step=1, value=1)
+                with col_c2:
+                    preco_input = st.number_input("Preço Unitário (R$)", min_value=0.0, step=0.10, format="%.2f")
+                
+                # --- LINHA DE COMPONENTES 2: DATAS E PRIORIDADE ---
+                col_c3, col_c4, col_c5 = st.columns([1.5, 1.5, 1])
+                with col_c3:
+                    dt_chegada_sel = st.date_input("📅 Chegada", value=datetime.date.today())
+                with col_c4:
+                    dt_entrega_sel = st.date_input("📅 Entrega", value=datetime.date.today())
+                with col_c5:
+                    prio_input = st.selectbox("🔥 Prioridade", ["Não", "Sim"])
+                    
+                st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+                btn_salvar_lote = st.form_submit_button("📦 Registrar Entrada do Lote", use_container_width=True)
+                
+            if btn_salvar_lote:
+                if not fornecedor_input or not of_input or not referencia_input:
+                    st.error("❌ Todos os campos de texto são obrigatórios!")
+                elif preco_input <= 0:
+                    st.error("❌ O preço unitário deve ser maior que R$ 0,00!")
+                else:
+                    dt_chegada_txt = dt_chegada_sel.strftime("%d/%m/%Y")
+                    dt_entrega_txt = dt_entrega_sel.strftime("%d/%m/%Y")
+                    
+                    conn = sqlite3.connect("dlr_confecoes_v3.db")
+                    cursor = conn.cursor()
+                    
+                    # 🚀 ENGENHARIA DE SEGURANÇA: Cria a coluna nova na tabela caso ela não exista no HD
+                    try: cursor.execute("ALTER TABLE lotes_gerais ADD COLUMN mes_ano_cadastro TEXT DEFAULT ''")
+                    except: pass
+                    
+                    try:
+                        # Tranca de forma vitalícia a chave do mês do calendário ativo selecionado (ex: "10/2026")
+                        cursor.execute("""
+                            INSERT INTO lotes_gerais (data_cadastro, data_entrega, fornecedor, of, referencia, qtd_prevista, preco, status, porcentagem_pronta, qtd_pronta, prioridade, mes_ano_cadastro) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, 'Pendente', 0, 0, ?, ?)
+                        """, (dt_chegada_txt, dt_entrega_txt, fornecedor_input, of_input, referencia_input, qtd_input, preco_input, prio_input, periodo_ativo_chave))
+                        conn.commit()
+                        st.success(f"🎉 Lote O.F {of_input} cadastrado e preso com sucesso no painel de {mes_ativo_txt}!")
+                    except sqlite3.IntegrityError:
+                        st.error("⚠️ Esse número de O.F já existe no banco de dados!")
+                    finally:
+                        conn.close()
+        # 📈 SUB-TELA B: ANDAMENTO DE PRODUÇÃO E LINHA DO TEMPO DE LOTES (A.P) — UNIFICADO
+        # ==============================================================================
+        elif st.session_state.sub_menu_manual_lotes == "A.P":
+            # --- SELETORES GERAIS DE FILTRO NA PARTE SUPERIOR ---
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                mes_ext_sel = st.selectbox("Filtrar por Mês:", lista_meses_sistema, index=lista_meses_sistema.index(st.session_state.calendario_master_mes), key="filtro_mes_manual_v15_final")
+            with col_f2:
+                ano_ext_sel = st.selectbox("Filtrar por Ano:", lista_anos_sistema, index=lista_anos_sistema.index(st.session_state.calendario_master_ano), key="filtro_ano_manual_v15_final")
+                
+            if mes_ext_sel != st.session_state.calendario_master_mes or ano_ext_sel != st.session_state.calendario_master_ano:
+                st.session_state.calendario_master_mes = mes_ext_sel
+                st.session_state.calendario_master_ano = ano_ext_sel
+                st.rerun()
+
+            # --- MOTOR DE CÁLCULO DOS CARDS CONTADORES ---
+            qtd_pendentes = 0
+            qtd_em_producao = 0
+            qtd_vencidos = 0
+            qtd_concluidos = 0
+            data_hoje_dt = datetime.date.today()
+            
+            conn = sqlite3.connect("dlr_confecoes_v3.db")
+            cursor = conn.cursor()
+            try: cursor.execute("ALTER TABLE lotes_gerais ADD COLUMN mes_ano_cadastro TEXT DEFAULT ''")
+            except: pass
+            
+            # Captura todas as colunas necessárias em uma busca única e limpa
+            cursor.execute("SELECT status, data_entrega, prioridade, data_cadastro, mes_ano_cadastro FROM lotes_gerais")
+            todos_lotes_db = cursor.fetchall()
+            conn.close()
+            
+            for lote_db in todos_lotes_db:
+                status_lote = str(lote_db[0]).strip()
+                dt_ent_db = lote_db[1]
+                prio_db = lote_db[2]
+                dt_cad_db = lote_db[3]
+                mes_ano_cad_db = lote_db[4]
+                
+                # TRAVA RESTRITA: Se tiver a chave oculta de cadastro, usa ela! Senão, pega do MM/AAAA da data de chegada antiga.
+                chave_conferencia = mes_ano_cad_db if (mes_ano_cad_db and mes_ano_cad_db != '') else f"{dt_cad_db[3:5]}/{dt_cad_db[6:10]}"
+                
+                if chave_conferencia == periodo_ativo_chave:
+                    try: dt_entrega_dt = dt_class.strptime(dt_ent_db, "%d/%m/%Y").date()
+                    except: dt_entrega_dt = None
+                    
+                    # Contagem exata por status para alimentar os 4 cards do topo
+                    if status_lote == "Pendente": 
+                        qtd_pendentes += 1
+                    elif status_lote == "Em produção": 
+                        qtd_em_producao += 1
+                    elif status_lote == "Concluído": 
+                        qtd_concluidos += 1
+                    
+                    try:
+                        if dt_entrega_dt and data_hoje_dt > dt_entrega_dt and status_lote != "Concluído":
+                            qtd_vencidos += 1
+                    except: pass
+
+            # --- CARDS COMPACTOS COM AS MEDIDAS DE 120PX DE ALTURA E FONTES DE 30PX ---
+            st.markdown(f"""
+                <div style='width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 10px; margin-bottom: 10px;'>
+                    <div style='background-color: #EF6C00; padding: 10px 5px; border-radius: 8px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center; height: 120px;'>
+                        <div style='font-size: 18px; font-weight: normal; color: #FFE0B2; opacity: 0.9;'>Lotes Pendentes</div>
+                        <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 30px; font-weight: bold;'>{qtd_pendentes}</h4>
+                    </div>
+                    <div style='background-color: #2E7D32; padding: 10px 5px; border-radius: 6px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center; height: 120px;'>
+                        <div style='font-size: 18px; font-weight: normal; color: #E8F5E9; opacity: 0.9;'>Em Produção</div>
+                        <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 30px; font-weight: bold;'>{qtd_em_producao}</h4>
+                    </div>
+                    <div style='background-color: #C62828; padding: 10px 5px; border-radius: 6px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center; height: 120px;'>
+                        <div style='font-size: 18px; font-weight: normal; color: #FFEBEE; opacity: 0.9;'>Lotes Vencidos</div>
+                        <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 30px; font-weight: bold;'>{qtd_vencidos}</h4>
+                    </div>
+                    <div style='background-color: #1565C0; padding: 10px 5px; border-radius: 6px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center; height: 120px;'>
+                        <div style='font-size: 18px; font-weight: normal; color: #E3F2FD; opacity: 0.9;'>Concluídos</div>
+                        <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 30px; font-weight: bold;'>{qtd_concluidos}</h4>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown("<hr style='margin-top: 15px; margin-bottom: 10px; border: 0; border-top: 1px solid #424242;'>", unsafe_allow_html=True)
+            st.write("📋 **Dica do Setor:** Altere entre Pendente e Em produção. Lotes ativos rolam de mês automaticamente!")
+
+        # --- MONTAGEM DA PLANILHA EXCLUSIVA DO MÊS SELECIONADO ---
+            linhas_tabela_manual = []
+            conn = sqlite3.connect("dlr_confecoes_v3.db")
+            df_lotes_brutos = pd.read_sql_query("SELECT id, data_cadastro, data_inicio_producao, data_entrega, fornecedor, of, referencia, qtd_prevista, preco, status, porcentagem_pronta, qtd_pronta, prioridade, mes_ano_cadastro FROM lotes_gerais", conn)
+            conn.close()
+
+            if not df_lotes_brutos.empty:
+                for idx, row in df_lotes_brutos.iterrows():
+                    dt_cad = row["data_cadastro"]; status_at = row["status"]; prio_at = row["prioridade"]
+                    dt_ent = row["data_entrega"]; m_a_cad = row["mes_ano_cadastro"]
+                    
+                    # FILTRO RESTRITO EXIGIDO: O lote fica preso apenas no mês em que você clicou em salvar!
+                    chave_conferencia_tabela = m_a_cad if (m_a_cad and m_a_cad != '') else f"{dt_cad[3:5]}/{dt_cad[6:10]}"
+                    
+                    if chave_conferencia_tabela == periodo_ativo_chave:
+                        try: dt_chegada_dt = dt_class.strptime(dt_cad, "%d/%m/%Y").date()
+                        except: dt_chegada_dt = data_hoje_dt
+                        
+                        # Motor de dias pendentes contínuo até HOJE (Zerado automaticamente se concluído)
+                        if status_at == "Concluído":
+                            dias_pendente = 0
+                        else:
+                            dias_pendente = (data_hoje_dt - dt_chegada_dt).days
+                            if dias_pendente < 0: dias_pendente = 0
+
+                        if status_at == "Pendente": cor_bola = "🟠"
+                        elif status_at == "Em produção": cor_bola = "🟢"
+                        else: cor_bola = "🔵"
+                        
+                        try:
+                            dt_entrega_dt = dt_class.strptime(dt_ent, "%d/%m/%Y").date()
+                            if dt_entrega_dt and data_hoje_dt > dt_entrega_dt and status_at != "Concluído":
+                                cor_bola = "🔴"
+                        except: pass
+                        
+                        signal_final = f"{cor_bola} {cor_bola}" if prio_at == "Sim" else cor_bola
+
+                        linhas_tabela_manual.append({
+                            "ID_T": int(row["id"]), "🚨 Alerta": signal_final, "Nome do fornecedor": row["fornecedor"],
+                            "Nº do O.F": row["of"], "Referência": row["referencia"], "Quantidade Total de Peças na Nota": int(row["qtd_prevista"]),
+                            "Dias pendente": int(dias_pendente), "Data chegada": dt_cad, "Data para entrega": dt_ent,
+                            "Preço Unitário": float(row["preco"]), "Status": status_at, "Porcentagem já produzido": f"{row['porcentagem_pronta']}%",
+                            "Peças Prontas Reais": int(row["qtd_pronta"]), "Prioridade": prio_at
+                        })
+
+            # --- PLANILHA ULTRA ESPREMIDADE COMPACTA EM LARGURA ---
+            if linhas_tabela_manual:
+                df_manual_visao = pd.DataFrame(linhas_tabela_manual)
+                chave_editor_man_lotes = f"tabela_esteira_manual_DL_{periodo_ativo_chave}"
+                
+                tabela_editada_man = st.data_editor(
+                    df_manual_visao,
+                    column_config={
+                        "ID_T": None,
+                        "🚨 Alerta": st.column_config.TextColumn("🚨 Alerta", width=55, disabled=True),
+                        "Nome do fornecedor": st.column_config.TextColumn("Nome do fornecedor", width=110, disabled=True),
+                        "Nº do O.F": st.column_config.TextColumn("Nº do O.F", width=75, disabled=True),
+                        "Referência": st.column_config.TextColumn("Referência", width=75, disabled=True),
+                        "Quantidade Total de Peças na Nota": st.column_config.NumberColumn("Qtd Nota", width=75, disabled=True),
+                        "Dias pendente": st.column_config.NumberColumn("Dias Pend", width=65, disabled=True),
+                        "Data chegada": st.column_config.TextColumn("Chegada", width=85, disabled=True),
+                        "Data para entrega": st.column_config.TextColumn("Entrega", width=85, disabled=True),
+                        "Preço Unitário": st.column_config.NumberColumn("Preço Un", format="R$ %.2f", width=80, disabled=True),
+                        "Status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Em produção"], required=True, width=105),
+                        "Porcentagem já produzido": st.column_config.SelectboxColumn("Porcent", options=["0%", "10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100%"], required=True, width=75),
+                        "Peças Prontas Reais": st.column_config.NumberColumn("Pçs Reais", format="%d", disabled=True),
+                        "Prioridade": st.column_config.SelectboxColumn("Prioridade", options=["Não", "Sim"], required=True, width=75)
+                    },
+                    hide_index=True, use_container_width=True, key=chave_editor_man_lotes
+                )
+                
+                # MOTOR DE ATUALIZAÇÃO EM TEMPO REAL NO COFRE V3
+                if chave_editor_man_lotes in st.session_state and st.session_state[chave_editor_man_lotes]["edited_rows"]:
+                    conn = sqlite3.connect("dlr_confecoes_v3.db")
+                    cursor = conn.cursor()
+                    for idx_s, mudancas in st.session_state[chave_editor_man_lotes]["edited_rows"].items():
+                        id_lote_db = int(df_manual_visao.iloc[int(idx_s)]["ID_T"])
+                        if "Status" in mudancas:
+                            cursor.execute("UPDATE lotes_gerais SET status = ? WHERE id = ?", (mudancas["Status"], id_lote_db))
+                            if mudancas["Status"] == "Em produção":
+                                cursor.execute("UPDATE lotes_gerais SET data_inicio_producao = ? WHERE id = ? AND (data_inicio_producao = '' OR data_inicio_producao IS NULL)", (datetime.datetime.now().strftime("%d/%m/%Y"), id_lote_db))
+                            # 🚀 COMPUTAÇÃO DE CAIXA IMEDIATA: Se fechar o lote na fábrica, crava a data de faturamento do dia atual!
+                            elif mudancas["Status"] == "Concluído":
+                                cursor.execute("UPDATE lotes_gerais SET data_inicio_producao = ? WHERE id = ?", (datetime.datetime.now().strftime("%d/%m/%Y"), id_lote_db))
+                        if "Porcentagem já produzido" in mudancas:
+                            cursor.execute("UPDATE lotes_gerais SET porcentagem_pronta = ? WHERE id = ?", (int(mudancas["Porcentagem já produzido"].replace("%", "")), id_lote_db))
+                        if "Prioridade" in mudancas:
+                            cursor.execute("UPDATE lotes_gerais SET prioridade = ? WHERE id = ?", (mudancas["Prioridade"], id_lote_db))
+                    conn.commit(); conn.close(); st.rerun()
+
+                # --- LIXEIRA DE O.F NO RODAPÉ ---
+                st.markdown("<br>", unsafe_allow_html=True)
+                lista_ofs_excluir = [str(linha["Nº do O.F"]) for linha in linhas_tabela_manual]
+                of_selecionada_excluir = st.selectbox("🗑️ Selecione O.F para excluir:", ["Selecionar..."] + lista_ofs_excluir, key=f"lix_of_manual_f_{periodo_ativo_chave}")
+                
+                if of_selecionada_excluir != "Selecionar...":
+                    st.warning(f"⚠️ Deseja apagar permanentemente a O.F {of_selecionada_excluir}?")
+                    c_del_s, c_del_n = st.columns(2)
+                    with c_del_s:
+                        if st.button("✅ Sim, excluir definitivo", key="btn_del_of_manual_AP"):
+                            conn = sqlite3.connect("dlr_confecoes_v3.db"); cursor = conn.cursor()
+                            cursor.execute("DELETE FROM lotes_gerais WHERE of = ?", (of_selecionada_excluir.strip(),))
+                            conn.commit(); conn.close(); st.success("Deletado!"); st.rerun()
+                    with c_del_n:
+                        if st.button("❌ Não, cancelar", key="btn_cancel_del_of_manual_AP"): st.rerun()
+            else:
+                st.info("💡 Nenhum lote de produção ativo localizado para este período no Chão de Fábrica.")
+
+                # ⏱️ RECONECTOR MASTER DLR — PROCESSO DE LANÇAMENTO DE HORA EM HORA
+# ==============================================================================
+# Encostado na parede esquerda (zero espaços)! Força o Python a ler a aba sem travas!
+if st.session_state.sistema_autorizado and st.session_state.perfil_usuario == "Manual":
+    menu_manual_verificar = st.session_state.pagina_manual_atual
+    
+    if menu_manual_verificar == "⏱️ Produção de Hora em Hora":
+        st.title("⏱️ Eficiência Horária — Produção de Hora em Hora")
+        st.markdown(f"📊 Registre os ciclos de produção de hoje no período de: **{mes_ativo_txt} de {ano_ativo_txt}**")
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # --- GAVETA DE MEMÓRIA DO COFRE PARA AUTO-LIMPEZA HORÁRIA ---
+        if "phh_costureira_clean" not in st.session_state: st.session_state.phh_costureira_clean = ""
+        if "phh_operacao_clean" not in st.session_state: st.session_state.phh_operacao_clean = "Escolha uma operação..."
+        if "phh_qtd_clean" not in st.session_state: st.session_state.phh_qtd_clean = 1
+
+        # --- MOTOR DE PUXADA DINÂMICA DAS OPERAÇÕES DA ADMINISTRAÇÃO ---
+        conn = sqlite3.connect("dlr_confecoes_v3.db")
+        cursor = conn.cursor()
+        
+        # Preventivo: Garante a criação da tabela de operações para não dar erro de leitura
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS operacoes_frente (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, nome_operacao TEXT UNIQUE, preco_peca REAL
+            )
+        """)
+        cursor.execute("SELECT nome_operacao FROM operacoes_frente ORDER BY nome_operacao ASC")
+        lista_ops_db = [row[0] for row in cursor.fetchall()]
+        
+        # --- MOTOR DE PUXADA DINÂMICA FILTRANDO POR MARCAÇÃO DA LISTA (NOMES LIMPOS) ---
+        conn = sqlite3.connect("dlr_confecoes_v3.db")
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT nome_operacao FROM operacoes_frente ORDER BY nome_operacao ASC")
+        lista_ops_db = [row[0] for row in cursor.fetchall()]
+        
+        # 🚀 FILTRO SECO: Busca os nomes da tabela onde o status_cadastro foi marcado como 'Sim'
+        cursor.execute("SELECT nome FROM funcionarios WHERE status_cadastro = 'Sim'")
+        # O row[0] limpa os parênteses (,) e aspas trazendo o nome puro em texto!
+        lista_funcs_phh = [row[0] for row in cursor.fetchall()]
+        conn.close()
+
+        # --- 🎨 FORMULÁRIO DE LANÇAMENTO DA EFICIÊNCIA HORÁRIA ---
+        with st.form(key="form_producao_hora_hora_clean", clear_on_submit=True):
+            col_ph1, col_ph2, col_ph3 = st.columns([2, 2, 1.2])
+            
+            with col_ph1:
+                cost_phh_sel = st.selectbox(
+                    "Selecionar Costureira Horista", 
+                    lista_funcs_phh if lista_funcs_phh else ["Nenhuma cadastrada"],
+                    key="phh_costureira_clean"
+                )
+            with col_ph2:
+                operacao_phh_sel = st.selectbox(
+                    "Selecionar Tipo de Operação",
+                    ["Escolha uma operação..."] + lista_ops_db,
+                    key="phh_operacao_clean"
+                )
+            with col_ph3:
+                qtd_phh_input = st.number_input(
+                    "Quantidade de Peças", 
+                    min_value=1, 
+                    step=1, 
+                    key="phh_qtd_clean"
+                )
+                
+            st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
+            btn_registrar_phh = st.form_submit_button("⚡ Registrar Ciclo Horário", use_container_width=True)
+
+        # --- ⚙️ MOTOR DE VALORIZAÇÃO FINANCEIRA INTEGRADO COM PREÇOS DO ADMIN ---
+        if btn_registrar_phh:
+            if operacao_phh_sel == "Escolha uma operação..." or cost_phh_sel == "Nenhuma cadastrada":
+                st.error("❌ Operação Recusada! Selecione uma Costureira e uma Operação válida!")
+            elif qtd_phh_input <= 0:
+                st.error("❌ Operação Recusada! A quantidade deve ser maior que zero!")
+            else:
+                conn = sqlite3.connect("dlr_confecoes_v3.db")
+                cursor = conn.cursor()
+                cursor.execute("SELECT preco_peca FROM operacoes_frente WHERE nome_operacao = ?", (operacao_phh_sel,))
+                res_preco = cursor.fetchone()
+                
+                # 🚀 CORREÇÃO DE OURO: Adicionado [0] para extrair o preço limpo de dentro da tupla!
+                preco_unitario_op = float(res_preco[0]) if res_preco else 0.0
+                valor_total_calculado = preco_unitario_op * qtd_phh_input
+                data_hoje_txt = datetime.datetime.now().strftime("%d/%m/%Y")
+                
+                cursor.execute("""
+                    INSERT INTO producao_hora_hora (mes_ano, data_lancamento, costureira, operacao, qtd_pecas, valor_unitario, valor_total)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (periodo_ativo_chave, data_hoje_txt, cost_phh_sel, operacao_phh_sel, qtd_phh_input, preco_unitario_op, valor_total_calculado))
+                conn.commit()
+                conn.close()
+                
+                # 🎉 CORREÇÃO DE OURO: Removidas as linhas problemáticas de session_state!
+                # O clear_on_submit=True já esvazia as caixas de forma nativa e segura!
+                st.success(f"🎉 Sucesso! {qtd_phh_input} peças de {operacao_phh_sel} lançadas para {cost_phh_sel}!")
+                st.rerun()
+
+                # --- 📊 SEÇÃO INFERIOR RECALIBRADA: PLANILHA CONSOLIDADA COM DATA ---
+        st.markdown("<br><hr style='margin-top: 15px; margin-bottom: 15px; border: 0; border-top: 1px solid #424242;'>", unsafe_allow_html=True)
+        st.markdown("##### 📈 Resumo de Produção Acumulada das Colaboradoras")
+        st.write("Abaixo estão listados os lançamentos de eficiência horária e o volume de peças produzidas:")
+        st.markdown("<div style='margin-top: 8px;'></div>", unsafe_allow_html=True)
+        
+        conn = sqlite3.connect("dlr_confecoes_v3.db")
+        # Puxa o ID e a Data do banco para permitir a auditoria e a exclusão exata
+        df_producao_geral = pd.read_sql_query(f"SELECT id, data_lancamento, costureira, operacao, qtd_pecas FROM producao_hora_hora WHERE mes_ano = '{periodo_ativo_chave}' ORDER BY id DESC", conn)
+        conn.close()
+        
+        if not df_producao_geral.empty:
+            df_tabela_visao = df_producao_geral.copy()
+            df_tabela_visao.columns = ["ID_H", "Data", "Nome da Costureira", "Tipo de Operação", "Total de Peças"]
+            
+            # Renderiza a tabela ultra compacta espremida em pixels com a data inclusa
+            st.data_editor(
+                df_tabela_visao,
+                column_config={
+                    "ID_H": None, # Oculta o ID técnico
+                    "Data": st.column_config.TextColumn("Data", width=85, disabled=True),
+                    "Nome da Costureira": st.column_config.TextColumn("Nome da Costureira", width=220, disabled=True),
+                    "Tipo de Operação": st.column_config.TextColumn("Tipo de Operação", width=150, disabled=True),
+                    "Total de Peças": st.column_config.NumberColumn("Total de Peças", format="%d pçs", width=110, disabled=True)
+                },
+                hide_index=True,
+                use_container_width=True,
+                key=f"tabela_rendimento_hora_hora_audit_{periodo_ativo_chave}"
+            )
+        
+            # --- 🗑️ SEÇÃO DE REMOÇÃO SELETIVA DE LANÇAMENTOS NO RODAPÉ ---
+            st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+            
+            # Cria uma lista de opções inteligente combinando o ID, Nome e Operação para o usuário selecionar sem erro
+            lista_opcoes_excluir = [
+                f"ID: {reg['id']} | {reg['costureira']} - {reg['operacao']} ({reg['data_lancamento']})" 
+                for _, reg in df_producao_geral.iterrows()
+            ]
+            
+            registro_selecionado_excluir = st.selectbox(
+                "🗑️ Selecione um lançamento para excluir:", 
+                ["Selecionar..."] + lista_opcoes_excluir, 
+                key=f"lixeira_eficiencia_hora_{periodo_ativo_chave}"
+            )
+            
+            if registro_selecionado_excluir != "Selecionar...":
+                # Extrai o ID numérico puro que está no início do texto selecionado
+                id_puro_excluir = int(registro_selecionado_excluir.split("|")[0].replace("ID: ", "").strip())
+                
+                st.warning(f"⚠️ **Aviso de Segurança:** Tem certeza que deseja apagar permanentemente este ciclo de produção do histórico?")
+                col_del_h1, col_del_h2 = st.columns(2)
+                
+                with col_del_h1:
+                    if st.button("✅ Sim, apagar registro", use_container_width=True, type="primary", key="btn_confirma_del_hh"):
+                        conn = sqlite3.connect("dlr_confecoes_v3.db")
+                        cursor = conn.cursor()
+                        cursor.execute("DELETE FROM producao_hora_hora WHERE id = ?", (id_puro_excluir,))
+                        conn.commit()
+                        conn.close()
+                        
+                        # 🧼 LIMPEZA DE CHOQUE: Remove a chave do estado para forçar o selectbox a voltar para o "Selecionar..."
+                        if f"lixeira_eficiencia_hora_{periodo_ativo_chave}" in st.session_state:
+                            st.session_state.pop(f"lixeira_eficiencia_hora_{periodo_ativo_chave}")
+                            
+                        st.success("🎉 Lançamento removido do histórico com sucesso!")
+                        st.rerun()
+                        
+                with col_del_h2:
+                    # 🚀 CORREÇÃO DE OURO INDESTRUTÍVEL: O comando .pop() deleta a seleção antiga da memória interna do Streamlit!
+                    if st.button("❌ Não, manter registro", use_container_width=True, key="btn_cancela_del_hh"):
+                        if f"lixeira_eficiencia_hora_{periodo_ativo_chave}" in st.session_state:
+                            st.session_state.pop(f"lixeira_eficiencia_hora_{periodo_ativo_chave}")
+                        st.rerun()
+        else:
+            st.info("💡 Nenhum ciclo de produção horária foi lançado para as colaboradoras neste mês ainda.")
+
+            # 📈 RECONECTOR MASTER DLR — PROCESSO DE PROGRESSO DE LOTES (CONFERÊNCIA CENTRADA)
+# ==============================================================================
+# Encostado 100% na parede esquerda (zero espaços)! Força a abertura no meio da tela!
+if st.session_state.sistema_autorizado and st.session_state.perfil_usuario == "Conferencia":
+    menu_conf_verificar = st.session_state.pagina_conf_atual
+    
+    if menu_conf_verificar == "📈 Progresso de Lotes":
+        st.title("📈 Progresso e Auditoria de Entrega de Lotes (Conferência)")
+        st.markdown(f"📋 Monitore e finalize as ordens de fabricação referentes ao período de: **{mes_ativo_txt} de {ano_ativo_txt}**")
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # --- SELETORES GERAIS DE FILTRO NA PARTE SUPERIOR ---
+        col_conf_f1, col_conf_f2 = st.columns(2)
+        with col_conf_f1:
+            mes_ext_sel = st.selectbox("Filtrar por Mês:", lista_meses_sistema, index=lista_meses_sistema.index(st.session_state.calendario_master_mes), key="filtro_mes_conf_prog_final_v19")
+        with col_conf_f2:
+            ano_ext_sel = st.selectbox("Filtrar por Ano:", lista_anos_sistema, index=lista_anos_sistema.index(st.session_state.calendario_master_ano), key="filtro_ano_conf_prog_final_v19")
+            
+        if mes_ext_sel != st.session_state.calendario_master_mes or ano_ext_sel != st.session_state.calendario_master_ano:
+            st.session_state.calendario_master_mes = mes_ext_sel
+            st.session_state.calendario_master_ano = ano_ext_sel
+            st.rerun()
+
+        # --- MOTOR DE CÁLCULO DOS CARDS LIMITADO RIGOROSAMENTE AO MÊS DE CADASTRO ---
+        qtd_pendentes = 0; qtd_em_producao = 0; qtd_vencidos = 0; qtd_concluidos = 0; data_hoje_dt = datetime.date.today()
+        
+        conn = sqlite3.connect("dlr_confecoes_v3.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT status, data_entrega, prioridade, data_cadastro, mes_ano_cadastro FROM lotes_gerais")
+        todos_lotes_db = cursor.fetchall()
+        conn.close()
+        
+        for lote_db in todos_lotes_db:
+            status_lote, dt_ent_db, prio_db, dt_cad_db, mes_ano_cad_db = lote_db[0], lote_db[1], lote_db[2], lote_db[3], lote_db[4]
+            chave_conferencia = mes_ano_cad_db if (mes_ano_cad_db and mes_ano_cad_db != '') else f"{dt_cad_db[3:5]}/{dt_cad_db[6:10]}"
+            
+            if chave_conferencia == periodo_ativo_chave:
+                try: dt_entrega_dt = dt_class.strptime(dt_ent_db, "%d/%m/%Y").date()
+                except: dt_entrega_dt = None
+                
+                if status_lote == "Pendente": qtd_pendentes += 1
+                elif status_lote == "Em produção": qtd_em_producao += 1
+                elif status_lote == "Concluído": qtd_concluidos += 1
+                
+                try:
+                    if dt_entrega_dt and data_hoje_dt > dt_entrega_dt and status_lote != "Concluído":
+                        qtd_vencidos += 1
+                except: pass
+
+        # --- CARDS COMPACTOS COM AS MEDIDAS EXATAS DE 120PX DE ALTURA E FONTES DE 30PX ---
+        st.markdown(f"""
+            <div style='width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 10px; margin-bottom: 10px;'>
+                <div style='background-color: #EF6C00; padding: 10px 5px; border-radius: 8px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center; height: 120px;'>
+                    <div style='font-size: 18px; font-weight: normal; color: #FFE0B2; opacity: 0.9;'>Lotes Pendentes</div>
+                    <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 30px; font-weight: bold;'>{qtd_pendentes}</h4>
+                </div>
+                <div style='background-color: #2E7D32; padding: 10px 5px; border-radius: 8px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center; height: 120px;'>
+                    <div style='font-size: 18px; font-weight: normal; color: #E8F5E9; opacity: 0.9;'>Em Produção</div>
+                    <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 30px; font-weight: bold;'>{qtd_em_producao}</h4>
+                </div>
+                <div style='background-color: #C62828; padding: 10px 5px; border-radius: 8px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center; height: 120px;'>
+                    <div style='font-size: 18px; font-weight: normal; color: #FFEBEE; opacity: 0.9;'>Lotes Vencidos</div>
+                    <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 30px; font-weight: bold;'>{qtd_vencidos}</h4>
+                </div>
+                <div style='background-color: #1565C0; padding: 10px 5px; border-radius: 8px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center; height: 120px;'>
+                    <div style='font-size: 18px; font-weight: normal; color: #E3F2FD; opacity: 0.9;'>Concluídos</div>
+                    <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 30px; font-weight: bold;'>{qtd_concluidos}</h4>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("<hr style='margin-top: 15px; margin-bottom: 10px; border: 0; border-top: 1px solid #424242;'>", unsafe_allow_html=True)
+        st.write("📋 **Controle da Conferência:** Atualize o status para 'Concluído' e digite as peças prontas reais!")
+        # --- MONTAGEM DA PLANILHA DO PROGRESSO NO CENTRO PRINCIPAL CORRIGIDA ---
+        linhas_tabela_conferencia = []
+        conn = sqlite3.connect("dlr_confecoes_v3.db")
+        df_lotes_brutos = pd.read_sql_query("SELECT id, data_cadastro, data_inicio_producao, data_entrega, fornecedor, of, referencia, qtd_prevista, preco, status, porcentagem_pronta, qtd_pronta, prioridade, mes_ano_cadastro FROM lotes_gerais", conn)
+        conn.close()
+
+        if not df_lotes_brutos.empty:
+            data_hoje_dt = datetime.date.today()
+            
+            for idx, row in df_lotes_brutos.iterrows():
+                dt_cad = row["data_cadastro"]; status_at = row["status"]; prio_at = row["prioridade"]
+                dt_ent = row["data_entrega"]; m_a_cad = row["mes_ano_cadastro"]
+                
+                chave_conferencia_tabela = m_a_cad if (m_a_cad and m_a_cad != '') else f"{dt_cad[3:5]}/{dt_cad[6:10]}"
+                
+                if chave_conferencia_tabela == periodo_ativo_chave:
+                    try: dt_chegada_dt = dt_class.strptime(dt_cad, "%d/%m/%Y").date()
+                    except: dt_chegada_dt = data_hoje_dt
+                    # --- ⚙️ MOTOR DE PRAZOS DO ADMINISTRATIVO BLINDADO ---
+                    if status_at == "Concluído":
+                        dias_pendente = 0
+                    else:
+                        dias_pendente = (data_hoje_dt - dt_chegada_dt).days
+                        if dias_pendente < 0: dias_pendente = 0
+
+                    if status_at == "Pendente": cor_bola = "🟠"
+                    elif status_at == "Em produção": cor_bola = "🟢"
+                    else: cor_bola = "🔵"
+                    
+                    try:
+                        dt_entrega_dt = dt_class.strptime(dt_ent, "%d/%m/%Y").date()
+                        if dt_entrega_dt and data_hoje_dt > dt_entrega_dt and status_at != "Concluído": cor_bola = "🔴"
+                    except: pass
+                    
+                    signal_final = f"{cor_bola} {cor_bola}" if prio_at == "Sim" else cor_bola
+                    linhas_tabela_conferencia.append({"ID_T": int(row["id"]), "🚨 Alerta": signal_final, "Nome do fornecedor": row["fornecedor"], "Nº do O.F": row["of"], "Referência": row["referencia"], "Quantidade Total de Peças na Nota": int(row["qtd_prevista"]), "Dias pendente": int(dias_pendente), "Data chegada": dt_cad, "Data para entrega": dt_ent, "Preço Unitário": float(row["preco"]), "Status": status_at, "Porcentagem já produzido": f"{row['porcentagem_pronta']}%", "Peças Prontas Reais": int(row["qtd_pronta"]), "Prioridade": prio_at})
+
+        if linhas_tabela_conferencia:
+            df_conf_visao = pd.DataFrame(linhas_tabela_conferencia)
+            chave_editor_conf_lotes = f"tabela_esteira_conferencia_DL_{periodo_ativo_chave}"
+            
+            tabela_editada_conf = st.data_editor(
+                df_conf_visao,
+                column_config={
+                    "ID_T": None,
+                    "🚨 Alerta": st.column_config.TextColumn("🚨 Alerta", width=55, disabled=True),
+                    "Nome do fornecedor": st.column_config.TextColumn("Nome do fornecedor", width=110, disabled=True),
+                    "Nº do O.F": st.column_config.TextColumn("Nº do O.F", width=75, disabled=True),
+                    "Referência": st.column_config.TextColumn("Referência", width=75, disabled=True),
+                    "Quantidade Total de Peças na Nota": st.column_config.NumberColumn("Qtd Nota", width=75, disabled=True),
+                    "Dias pendente": st.column_config.NumberColumn("Dias Pend", width=65, disabled=True),
+                    "Data chegada": st.column_config.TextColumn("Chegada", width=85, disabled=True),
+                    "Data para entrega": st.column_config.TextColumn("Entrega", width=85, disabled=True),
+                    "Preço Unitário": st.column_config.NumberColumn("Preço Un", format="R$ %.2f", width=80, disabled=True),
+                    "Status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Em produção", "Concluído"], required=True, width=105),
+                    "Porcentagem já produzido": st.column_config.SelectboxColumn("Porcent", options=["0%", "10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100%"], required=True, width=75),
+                    # 🚀 CONFERÊNCIA: Peças Reais livre para digitação numérica!
+                    "Peças Prontas Reais": st.column_config.NumberColumn("Pçs Reais", format="%d", min_value=0, step=1, width=85),
+                    "Prioridade": st.column_config.SelectboxColumn("Prioridade", options=["Não", "Sim"], required=True, width=75)
+                },
+                hide_index=True, use_container_width=True, key=chave_editor_conf_lotes
+            )
+            
+            if chave_editor_conf_lotes in st.session_state and st.session_state[chave_editor_conf_lotes]["edited_rows"]:
+                conn = sqlite3.connect("dlr_confecoes_v3.db"); cursor = conn.cursor()
+                for idx_s, mudancas in st.session_state[chave_editor_conf_lotes]["edited_rows"].items():
+                    id_lote_db = int(df_conf_visao.iloc[int(idx_s)]["ID_T"])
+                    if "Status" in mudancas:
+                        cursor.execute("UPDATE lotes_gerais SET status = ? WHERE id = ?", (mudancas["Status"], id_lote_db))
+                        # 🚀 CONFERÊNCIA BLINDADA: Garante a data real de fechamento para o Dashboard ler!
+                        if mudancas["Status"] == "Concluído":
+                            cursor.execute("UPDATE lotes_gerais SET data_inicio_producao = ? WHERE id = ?", (datetime.datetime.now().strftime("%d/%m/%Y"), id_lote_db))
+                    if "Porcentagem já produzido" in mudancas:
+                        cursor.execute("UPDATE lotes_gerais SET porcentagem_pronta = ? WHERE id = ?", (int(mudancas["Porcentagem já produzido"].replace("%", "")), id_lote_db))
+                    if "Peças Prontas Reais" in mudancas:
+                        cursor.execute("UPDATE lotes_gerais SET qtd_pronta = ? WHERE id = ?", (int(mudancas["Peças Prontas Reais"]), id_lote_db))
+                    if "Prioridade" in mudancas:
+                        cursor.execute("UPDATE lotes_gerais SET prioridade = ? WHERE id = ?", (mudancas["Prioridade"], id_lote_db))
+                conn.commit(); conn.close(); st.rerun()
+        else:
+            st.info("💡 Nenhum lote de produção ativo localizado para este período na Conferência.")
+
+            # 📋 RECONECTOR MASTER DLR — LOTES EM ANDAMENTO (ADMINISTRAÇÃO ESPELHO PURO)
+# ==============================================================================
+# Encostado 100% na parede esquerda (zero espaços)! Tela travada apenas para leitura do dono!
+if st.session_state.sistema_autorizado and st.session_state.perfil_usuario == "Admin":
+    menu_admin_verificar = st.session_state.pagina_admin_atual
+    
+    if menu_admin_verificar == "📋 Lotes em Andamento":
+        st.title("📋 Lotes em Andamento — Espelho de Monitoramento (Admin)")
+        st.markdown(f"📊 Painel de auditoria visual referente ao período de: **{mes_ativo_txt} de {ano_ativo_txt}**")
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        
+        # --- MOTOR DE CÁLCULO DOS CARDS LIMITADO AO MÊS DE CADASTRO V3 (CORRIGIDO) ---
+        qtd_pendentes = 0
+        qtd_em_producao = 0
+        qtd_vencidos = 0
+        qtd_concluidos = 0
+        data_hoje_dt = datetime.date.today()
+        
+        conn = sqlite3.connect("dlr_confecoes_v3.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT status, data_entrega, prioridade, data_cadastro, mes_ano_cadastro FROM lotes_gerais")
+        todos_lotes_db = cursor.fetchall()
+        conn.close()
+        
+        for lote_db in todos_lotes_db:
+            # 🚀 CORREÇÃO DE OURO: Desempacota os índices exatos da busca SQL para alimentar o robô!
+            status_lote = str(lote_db[0]).strip()
+            dt_ent_db = str(lote_db[1]).strip()
+            prio_db = str(lote_db[2]).strip()
+            dt_cad_db = str(lote_db[3]).strip()
+            mes_ano_cad_db = str(lote_db[4]).strip() if lote_db[4] is not None else ""
+            
+            # Aplica a trava restrita por mês de entrada
+            chave_conferencia = mes_ano_cad_db if (mes_ano_cad_db and mes_ano_cad_db != '') else f"{dt_cad_db[3:5]}/{dt_cad_db[6:10]}"
+            
+            if chave_conferencia == periodo_ativo_chave:
+                try: dt_entrega_dt = dt_class.strptime(dt_ent_db, "%d/%m/%Y").date()
+                except: dt_entrega_dt = None
+                
+                # Computa os estados baseados nas células reais
+                if status_lote == "Pendente": 
+                    qtd_pendentes += 1
+                elif status_lote == "Em produção": 
+                    qtd_em_producao += 1
+                elif status_lote == "Concluído": 
+                    qtd_concluidos += 1
+                
+                try:
+                    if dt_entrega_dt and data_hoje_dt > dt_entrega_dt and status_lote != "Concluído":
+                        qtd_vencidos += 1
+                except: pass
+
+        # --- CARDS COMPACTOS FIÉIS AO ESPELHO: LARGURA CHEIA, 120PX DE ALTURA E FONTES DE 30PX ---
+        st.markdown(f"""
+            <div style='width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 10px; margin-bottom: 10px;'>
+                <div style='background-color: #EF6C00; padding: 10px 5px; border-radius: 8px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center; height: 120px;'>
+                    <div style='font-size: 18px; font-weight: normal; color: #FFE0B2; opacity: 0.9;'>Lotes Pendentes</div>
+                    <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 30px; font-weight: bold;'>{qtd_pendentes}</h4>
+                </div>
+                <div style='background-color: #2E7D32; padding: 10px 5px; border-radius: 8px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center; height: 120px;'>
+                    <div style='font-size: 18px; font-weight: normal; color: #E8F5E9; opacity: 0.9;'>Em Produção</div>
+                    <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 30px; font-weight: bold;'>{qtd_em_producao}</h4>
+                </div>
+                <div style='background-color: #C62828; padding: 10px 5px; border-radius: 8px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center; height: 120px;'>
+                    <div style='font-size: 18px; font-weight: normal; color: #FFEBEE; opacity: 0.9;'>Lotes Vencidos</div>
+                    <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 30px; font-weight: bold;'>{qtd_vencidos}</h4>
+                </div>
+                <div style='background-color: #1565C0; padding: 10px 5px; border-radius: 8px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; align-items: center; height: 120px;'>
+                    <div style='font-size: 18px; font-weight: normal; color: #E3F2FD; opacity: 0.9;'>Concluídos</div>
+                    <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 30px; font-weight: bold;'>{qtd_concluidos}</h4>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("<hr style='margin-top: 15px; margin-bottom: 10px; border: 0; border-top: 1px solid #424242;'>", unsafe_allow_html=True)
+        st.write("📋 **Visualização de Auditoria:** Painel travado apenas para leitura dos dados enviados de fábrica e conferência.")
+        # --- MONTAGEM DA PLANILHA DO ESPELHO CENTRALIZADO NO ADMIN ---
+        linhas_tabela_adm_lotes = []
+        conn = sqlite3.connect("dlr_confecoes_v3.db")
+        df_lotes_brutos = pd.read_sql_query("SELECT id, data_cadastro, data_inicio_producao, data_entrega, fornecedor, of, referencia, qtd_prevista, preco, status, porcentagem_pronta, qtd_pronta, prioridade, mes_ano_cadastro FROM lotes_gerais", conn)
+        conn.close()
+
+        if not df_lotes_brutos.empty:
+            data_hoje_dt = datetime.date.today()
+            for idx, row in df_lotes_brutos.iterrows():
+                dt_cad = row["data_cadastro"]; status_at = row["status"]; prio_at = row["prioridade"]
+                dt_ent = row["data_entrega"]; m_a_cad = row["mes_ano_cadastro"]
+                
+                chave_conferencia_tabela = m_a_cad if (m_a_cad and m_a_cad != '') else f"{dt_cad[3:5]}/{dt_cad[6:10]}"
+                
+                if chave_conferencia_tabela == periodo_ativo_chave:
+                    try: dt_chegada_dt = dt_class.strptime(dt_cad, "%d/%m/%Y").date()
+                    except: dt_chegada_dt = data_hoje_dt
+                    # --- ⚙️ MOTOR DE PRAZOS DO ADMINISTRATIVO BLINDADO ---
+                    if status_at == "Concluído":
+                        dias_pendente = 0
+                    else:
+                        dias_pendente = (data_hoje_dt - dt_chegada_dt).days
+                        if dias_pendente < 0: dias_pendente = 0
+
+                    if status_at == "Pendente": cor_bola = "🟠"
+                    elif status_at == "Em produção": cor_bola = "🟢"
+                    else: cor_bola = "🔵"
+                    
+                    try:
+                        dt_entrega_dt = dt_class.strptime(dt_ent, "%d/%m/%Y").date()
+                        if dt_entrega_dt and data_hoje_dt > dt_entrega_dt and status_at != "Concluído": cor_bola = "🔴"
+                    except: pass
+                    
+                    signal_final = f"{cor_bola} {cor_bola}" if prio_at == "Sim" else cor_bola
+                    linhas_tabela_adm_lotes.append({"ID_T": int(row["id"]), "🚨 Alerta": signal_final, "Nome do fornecedor": row["fornecedor"], "Nº do O.F": row["of"], "Referência": row["referencia"], "Quantidade Total de Peças na Nota": int(row["qtd_prevista"]), "Dias pendente": int(dias_pendente), "Data chegada": dt_cad, "Data para entrega": dt_ent, "Preço Unitário": float(row["preco"]), "Status": status_at, "Porcentagem já produzido": f"{row['porcentagem_pronta']}%", "Peças Prontas Reais": int(row["qtd_pronta"]), "Prioridade": prio_at})
+
+        if linhas_tabela_adm_lotes:
+            df_adm_visao = pd.DataFrame(linhas_tabela_adm_lotes)
+            chave_editor_adm_lotes = f"tabela_esteira_admin_DL_{periodo_ativo_chave}"
+            
+            # 🚀 TRAVA DE LEITURA COMPLETA: Todas as colunas estão com disabled=True
+            tabela_editada_adm = st.data_editor(
+                df_adm_visao,
+                column_config={
+                    "ID_T": None,
+                    "🚨 Alerta": st.column_config.TextColumn("🚨 Alerta", width=55, disabled=True),
+                    "Nome do fornecedor": st.column_config.TextColumn("Nome do fornecedor", width=110, disabled=True),
+                    "Nº do O.F": st.column_config.TextColumn("Nº do O.F", width=75, disabled=True),
+                    "Referência": st.column_config.TextColumn("Referência", width=75, disabled=True),
+                    "Quantidade Total de Peças na Nota": st.column_config.NumberColumn("Qtd Nota", width=75, disabled=True),
+                    "Dias pendente": st.column_config.NumberColumn("Dias Pend", width=65, disabled=True),
+                    "Data chegada": st.column_config.TextColumn("Chegada", width=85, disabled=True),
+                    "Data para entrega": st.column_config.TextColumn("Entrega", width=85, disabled=True),
+                    "Preço Unitário": st.column_config.NumberColumn("Preço Un", format="R$ %.2f", width=80, disabled=True),
+                    "Status": st.column_config.TextColumn("Status", width=105, disabled=True),
+                    "Porcentagem já produzido": st.column_config.TextColumn("Porcent", width=75, disabled=True),
+                    "Peças Prontas Reais": st.column_config.NumberColumn("Pçs Reais", format="%d", width=85, disabled=True),
+                    "Prioridade": st.column_config.TextColumn("Prioridade", width=75, disabled=True)
+                },
+                hide_index=True, use_container_width=True, key=chave_editor_adm_lotes
+            )
+        else:
+            st.info("💡 Nenhum lote de produção ativo localizado para este período na Administração.")
+
+            # 📥 RECONECTOR MASTER DLR — IMPORTAR PONTO MANUAIS (LARGURA E FILTROS BLINDADOS)
+# ==============================================================================
+# Encostado 100% na parede esquerda (zero espaços)! Destrava o ponto na tela cheia!
+if st.session_state.sistema_autorizado and st.session_state.perfil_usuario == "Conferencia":
+    menu_conf_verificar = st.session_state.pagina_conf_atual
+    
+    if menu_conf_verificar == "📥 Importar Ponto":
+        # 🚀 INJEÇÃO MÁGICA: Quebra a caixinha de 400px e liberta o formulário para ocupar a largura cheia do monitor!
+        st.markdown("""
+            <style>
+                div[data-testid="stForm"] {
+                    max-width: 100% !important;
+                    margin: 0px !important;
+                    padding: 20px !important;
+                }
             </style>
         """, unsafe_allow_html=True)
 
-        # Mantém a exibição da logo com o tamanho perfeito de 200 pixels que você aprovou
-        try:
-            st.image("logo_dlr.png.png", width=300)
-        except Exception:
-            st.markdown("<h2 style='text-align: center; color: #4A154B;'>🧵 Confecção DLR</h2>", unsafe_allow_html=True)
-            
-        st.markdown("<p style='text-align: center; color: #6B7280; font-size: 0.9rem; margin-top: -10px;'>Sistema Integrado de Gestão e Produção</p>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: #9CA3AF; margin-top: 20px;'>🔑 Controle de Acesso</p>", unsafe_allow_html=True)
-        
-        with st.form("form_login", clear_on_submit=False):
-            usuario_input = st.text_input("Usuário").strip()
-            senha_input = st.text_input("Senha", type="password")
-            botao_entrar = st.form_submit_button("Entrar no Sistema", use_container_width=True)
-            
-            if botao_entrar:
-                if usuario_input in USUARIOS and USUARIOS[usuario_input]["senha"] == senha_input:
-                    st.session_state.logado = True
-                    st.session_state.perfil_atual = USUARIOS[usuario_input]["perfil"]
-                    st.session_state.usuario_nome = USUARIOS[usuario_input]["nome"]
-                    st.rerun()
-                else:
-                    st.error("❌ Usuário ou senha incorretos. Tente novamente.")
-                    
-    st.stop()
+        st.title("📥 Registro Manual de Ponto — Costureiras Horistas")
+        st.markdown(f"⏱️ Lance o total de horas trabalhadas pelas colaboradoras na competência: **{mes_ativo_txt} de {ano_ativo_txt}**")
+        st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- SISTEMA LOGADO (ATUALIZAÇÃO: TUDO NO LADO ESQUERDO) ---
-with st.sidebar:
-    st.markdown("### ⚙️ Sessão Ativa")
-    st.markdown(f"👤 **Usuário:**\n_{st.session_state.usuario_nome}_")
-    # APAGADO: O texto da Área e as linhas divisórias extras saíram daqui
-    
+        # --- MOTOR DE PUXADA DINÂMICA MASTER GERENCIAL: EXTRAÇÃO CIRÚRGICA DE TEXTO ---
+        conn = sqlite3.connect("dlr_confecoes_v3.db")
+        cursor = conn.cursor()
         
-
-# Garante que um perfil padrão esteja selecionado ao abrir
-if "perfil_atual" not in st.session_state:
-    st.session_state.perfil_atual = "admin"
-
-
-# --- LÓGICA DA ÁREA 1: ADMINISTRAÇÃO ---
-if st.session_state.perfil_atual == "admin":
-    with st.sidebar:
-        st.markdown("---")
-        st.markdown("### 🗂️ Menu de Páginas")
+        # Garante preventivamente a existência da tabela de ponto no HD
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS registro_ponto_horistas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, mes_ano TEXT, data_registro TEXT, costureira TEXT, horas_totais REAL
+            )
+        """)
         
-        paginas_admin = {
-            "🏠 Dashboard Inicial": "🏠 Dashboard Inicial",
-            "👤 Cadastrar Funcionário": "👤 Cadastrar Funcionário",
-            "📋 Lotes em Andamento": "📋 Lotes em Andamento",
-            "🚚 Serviços Externos": "🚚 Serviços Externos",
-            "💰 Financeiro Geral": "💰 Financeiro Geral",
-            "📅 Extrato do Mês": "📅 Extrato do Mês"
-        }
+        # Garante que a tabela geral de funcionários exista no banco de dados resetado
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS funcionarios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, tipo_pagamento TEXT, valor_base REAL, chave_pix TEXT, externo TEXT, status_cadastro TEXT
+            )
+        """)
         
-        for label, pagina_id in paginas_admin.items():
-            if st.session_state.pagina_admin_atual == pagina_id:
-                st.markdown(f"""
-                    <div style='background-color: #FFFFFF; color: #000000; padding: 10px 15px; border-radius: 6px; font-weight: bold; text-align: center; border: 2px solid #4A154B; margin-bottom: 8px;'>
-                        {label}
-                    </div>
-                """, unsafe_allow_html=True)
+        # 🚀 BUSCA TOTAL: Captura o nome de todos os colaboradores ativos sem nenhuma trava de cargo ou pagamento
+        cursor.execute("SELECT nome FROM funcionarios WHERE status_cadastro != 'Demitido' ORDER BY nome ASC")
+        
+        # 🚀 CORREÇÃO DE OURO INDESTRUTÍVEL: O row[0] captura o texto puro do nome e limpa os parênteses (,) e aspas!
+        lista_horistas_ponto = [str(row[0]).strip() for row in cursor.fetchall() if row and row[0] is not None]
+        conn.close()
+
+        # --- 🎨 FORMULÁRIO DE LANÇAMENTO EXPANDIDO DE PAREDE A PAREDE ---
+        with st.form(key="form_importar_ponto_manual_dlr", clear_on_submit=True):
+            col_pt1, col_ph2 = st.columns(2)
+            with col_pt1:
+                cost_ponto_sel = st.selectbox(
+                    "Selecionar Costureira Horista Ativa",
+                    lista_horistas_ponto if lista_horistas_ponto else ["Nenhuma costureira horista habilitada no sistema"],
+                    key="pt_costureira_master"
+                )
+            with col_ph2:
+                horas_ponto_input = st.number_input(
+                    "Total de Horas Trabalhadas no Mês",
+                    min_value=0.0,
+                    step=1.0,
+                    format="%.2f",
+                    key="pt_horas_master"
+                )
+                
+            st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
+            btn_salvar_ponto = st.form_submit_button("📥 Registrar Total de Horas no Ponto", use_container_width=True)
+
+        # --- MOTOR DE GRAVAÇÃO NO COFRE V3 ---
+        if btn_salvar_ponto:
+            if cost_ponto_sel == "Nenhuma costureira horista habilitada no sistema":
+                st.error("❌ Operação Recusada! Vá na Ficha L.F da Administração e mude 'Lançar no Manual' para 'Sim' nas funcionárias!")
+            elif horas_ponto_input <= 0:
+                st.error("❌ Operação Recusada! O total de horas deve ser maior que zero!")
             else:
-                if st.button(label, use_container_width=True, key=f"btn_sid_{pagina_id}"):
-                    st.session_state.pagina_admin_atual = pagina_id
-                    st.rerun()
-
-        # --- DEVOLVENDO O BOTÃO DE SAIR NO FINAL DA BARRA ---
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("---")
-        
-        if st.button("🚪 Sair do Sistema", use_container_width=True, type="secondary", key="btn_sair_admin_recuperado"):
-            st.session_state.logado = False
-            st.session_state.perfil_atual = None
-            st.rerun()
-
-                       
-    # --- SUB-PÁGINA 1: CADASTRO DE FUNCIONÁRIOS ---
-    if st.session_state.pagina_admin_atual == "👤 Cadastrar Funcionário":
-        st.subheader("👤 Gestão de Colaboradores — DLR")
-        
-        if "tipo_tela_func" not in st.session_state:
-            st.session_state.tipo_tela_func = "R.F"
-
-        # Seção de botões horizontais
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_f1, col_f2, col_f_espaco = st.columns(3)
-        
-        with col_f1:
-            tipo_rf = "primary" if st.session_state.tipo_tela_func == "R.F" else "secondary"
-            if st.button("📝 Registrar Funcionário (R.F)", use_container_width=True, type=tipo_rf):
-                st.session_state.tipo_tela_func = "R.F"
-                st.rerun()
+                conn = sqlite3.connect("dlr_confecoes_v3.db"); cursor = conn.cursor()
                 
-        with col_f2:
-            tipo_lf = "primary" if st.session_state.tipo_tela_func == "L.F" else "secondary"
-            if st.button("📋 Lista de Funcionários (L.F)", use_container_width=True, type=tipo_lf):
-                st.session_state.tipo_tela_func = "L.F"
-                st.rerun()
-
-        st.markdown("---")
-
-        # --- TELA 1: FORMULÁRIO DE CADASTRO (R.F) ---
-        if st.session_state.tipo_tela_func == "R.F":
-            if "contador_form_func" not in st.session_state:
-                st.session_state.contador_form_func = 0
+                # Se já tiver um ponto lançado para ela neste mesmo mês, atualiza! Senão, faz um novo insert!
+                cursor.execute("SELECT id FROM registro_ponto_horistas WHERE costureira = ? AND mes_ano = ?", (cost_ponto_sel, periodo_ativo_chave))
+                existe_ponto = cursor.fetchone()
                 
-            with st.form(key=f"form_cad_{st.session_state.contador_form_func}", clear_on_submit=False):
-                nome = st.text_input("Nome Completo")
-                cargo = st.selectbox("Cargo", ["Costureira", "Manual", "Revisora", "Conferente", "Supervisor(a)", "Entregador"])
-                forma_pagamento = st.selectbox("Forma Pagamento", ["Por hora", "Por operação (peça)", "Fixo"])
-                valor_dinheiro = st.number_input("Valor R$", min_value=0.0, format="%.2f")
+                data_hoje_txt = datetime.datetime.now().strftime("%d/%m/%Y")
                 
-                # REQUISITO EXIGIDO: Novo campo de Chave PIX no formulário de cadastro
-                pix_input = st.text_input("Chave PIX para Pagamento (CPF, Celular, Aleatória...)")
-                
-                externo = st.radio("Externo?", ["Não", "Sim"], horizontal=True)
-                
-                pre_salvar = st.form_submit_button("💾 Salvar Funcionário")
-                
-                if pre_salvar:
-                    if not nome.strip():
-                        st.error("❌ O campo 'Nome Completo' é obrigatório!")
-                    elif forma_pagamento in ["Por hora", "Fixo"] and valor_dinheiro <= 0:
-                        st.error(f"❌ Para contratos '{forma_pagamento}', o campo 'Valor R$' deve ser maior que R$ 0,00.")
-                    else:
-                        st.session_state.aguardando_confirmacao_func = {
-                            "nome": nome, "cargo": cargo, "pagamento": forma_pagamento, 
-                            "valor_hora": valor_dinheiro, "externo": externo, "chave_pix": pix_input.strip()
-                        }
-
-            # Confirmação Segura
-            if "aguardando_confirmacao_func" in st.session_state and st.session_state.aguardando_confirmacao_func:
-                dados_novos = st.session_state.aguardando_confirmacao_func
-                st.warning(f"⚠️ **Confirmação de Cadastro:** Tem certeza que deseja salvar o(a) funcionário(a) **{dados_novos['nome']}**?")
-                
-                col_sim, col_nao = st.columns(2)
-                col_sim, col_nao = st.columns(2)
-                with col_sim:
-                    if st.button("✅ Sim, tenho certeza", use_container_width=True, type="primary"):
-                        # CORREÇÃO DE OURO: Todo este bloco agora está perfeitamente embutido dentro do clique do botão!
-                        sucesso_db = db_salvar_funcionario(
-                            nome=dados_novos["nome"],
-                            cargo=dados_novos["cargo"],
-                            pagamento=dados_novos["pagamento"],
-                            valor_hora=dados_novos["valor_hora"],
-                            chave_pix=dados_novos["chave_pix"]
-                        )
-                        
-                        if sucesso_db:
-                            st.success(f"🎉 Excelente! **{dados_novos['nome']}** foi registrado permanentemente no HD da empresa!")
-                            st.session_state.aguardando_confirmacao_func = None
-                            st.session_state.contador_form_func += 1
-                            st.rerun()
-                        else:
-                            st.error("❌ Falha técnica ao tentar gravar o funcionário no banco de dados.")
-                            st.session_state.aguardando_confirmacao_func = None
-                            st.rerun()
-                            
-                with col_nao:
-                    if st.button("❌ Não, cancelar", use_container_width=True):
-                        st.info("Cadastro cancelado.")
-                        st.session_state.aguardando_confirmacao_func = None
-                        st.rerun()
-
-        # --- TELA 2: LISTA DE FUNCIONÁRIOS (L.F) ---
-        elif st.session_state.tipo_tela_func == "L.F":
-            st.write("📝 **Dica do Chefe:** Altere os dados ou apague linhas livremente na tabela abaixo. Após terminar, clique em **Confirmar Alterações Feitas** para salvar em definitivo no HD!")
-            
-            if "funcionarios" not in st.session_state:
-                st.session_state.funcionarios = []
-                
-            # Garante a inicialização da versão dinâmica para controle do cache da tabela
-            if "versao_editor_func" not in st.session_state:
-                st.session_state.versao_editor_func = 0
-                
-            chave_tabela_func = f"editor_func_global_v29_v{st.session_state.versao_editor_func}"
-            
+                if existe_ponto:
+                    cursor.execute("UPDATE registro_ponto_horistas SET horas_totais = ?, data_registro = ? WHERE id = ?", (horas_ponto_input, data_hoje_txt, existe_ponto[0]))
+                else:
+                    cursor.execute("""
+                        INSERT INTO registro_ponto_horistas (mes_ano, data_registro, costureira, horas_totais)
+                        VALUES (?, ?, ?, ?)
+                    """, (periodo_ativo_chave, data_hoje_txt, cost_ponto_sel, horas_ponto_input))
                     
-            # TABELA DO ADMINISTRADOR CONECTADA AO COFRE SQLITE
-            funcionarios_atualizados = st.data_editor(
-                st.session_state.funcionarios,
+                conn.commit(); conn.close()
+                st.success(f"🎉 Sucesso! Registrado {horas_ponto_input:.2f} horas para a colaboradora {cost_ponto_sel}!")
+                st.rerun()
+
+        # --- 📊 PLANILHA DE HISTÓRICO DE HORAS LANÇADAS NO MÊS ---
+        st.markdown("<br><hr style='margin-top: 15px; margin-bottom: 15px; border: 0; border-top: 1px solid #424242;'>", unsafe_allow_html=True)
+        st.markdown("##### 📈 Espelho de Horas Acumuladas no Mês")
+        
+        conn = sqlite3.connect("dlr_confecoes_v3.db")
+        df_ponto_mes = pd.read_sql_query(f"SELECT id, data_registro, costureira, horas_totais FROM registro_ponto_horistas WHERE mes_ano = '{periodo_ativo_chave}' ORDER BY costureira ASC", conn)
+        conn.close()
+        
+        if not df_ponto_mes.empty:
+            df_pt_visao = df_ponto_mes.copy()
+            df_pt_visao.columns = ["ID_P", "Data do Lançamento", "Nome da Costureira", "Horas Totais Registradas"]
+            
+            st.data_editor(
+                df_pt_visao,
                 column_config={
-                    "nome": st.column_config.TextColumn("👤 Nome Completo"),
-                    "cargo": st.column_config.SelectboxColumn("💼 Cargo / Função", options=["Costureira", "Manual", "Revisora", "Conferente", "Supervisor(a)", "Entregador"]),
-                    "pagamento": st.column_config.SelectboxColumn("💳 Tipo de Pagamento", options=["Por hora", "Por operação (peça)", "Fixo"]),
-                    "valor_hora": st.column_config.NumberColumn("💰 Valor R$", format="R$ %.2f", min_value=0.0),
-                    "chave_pix": st.column_config.TextColumn("🔑 Chave PIX")
+                    "ID_P": None,
+                    "Data do Lançamento": st.column_config.TextColumn("Data de Registro", width=140, disabled=True),
+                    "Nome da Costureira": st.column_config.TextColumn("Nome da Costureira", width=300, disabled=True),
+                    "Horas Totais Registradas": st.column_config.NumberColumn("Horas Acumuladas", format="%.2f hrs", width=160, disabled=True)
                 },
-                hide_index=True,
-                use_container_width=True,
-                num_rows="dynamic", # Permite adicionar e deletar linhas livremente na tela
-                key=chave_tabela_func
+                hide_index=True, use_container_width=True, key=f"tabela_ponto_horistas_audit_{periodo_ativo_chave}"
             )
             
-            # Identifica se o usuário mexeu na estrutura da planilha (editou, apagou ou adicionou)
-            dados_mudaram_lf = False
-            if chave_tabela_func in st.session_state:
-                estado_tabela = st.session_state[chave_tabela_func]
-                if estado_tabela["edited_rows"] or estado_tabela["deleted_rows"] or estado_tabela["added_rows"]:
-                    dados_mudaram_lf = True
+            # --- 🗑️ BOTÃO DE EXCLUSÃO SELETIVA NO RODAPÉ ---
+            st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+            lista_p_excluir = [f"ID: {r['id']} | {r['costureira']} ({r['horas_totais']:.2f} hrs)" for _, r in df_ponto_mes.iterrows()]
+            pt_selecionado_excluir = st.selectbox("🗑️ Selecione um lançamento para remover do ponto:", ["Selecionar..."] + lista_p_excluir, key=f"lix_ponto_{periodo_ativo_chave}")
             
-            if dados_mudaram_lf:
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.warning("⚠️ **Aviso de Alteração:** Você modificou dados ou removeu colaboradores!")
-                
-                col_conf_salvar, col_conf_cancelar = st.columns(2)
-                with col_conf_salvar:
-                    if st.button("📝 Confirmar Alterações Feitas", use_container_width=True, type="primary", key="btn_salvar_mudancas_lf_db"):
-                        try:
-                            # 1. Abre o cofre do banco para fazer a limpeza e atualização
-                            conn = sqlite3.connect("dlr_confecoes.db")
-                            cursor = conn.cursor()
-                            
-                            # 2. Limpa a tabela antiga para reinjetar a nova lista atualizada da tela
-                            cursor.execute("DELETE FROM funcionarios")
-                            
-                            # 3. Varre a tabela que está na tela e grava linha por linha no HD
-                            for linha_f in funcionarios_atualizados:
-                                nome_salvar = str(linha_f.get("nome", "")).strip()
-                                if nome_salvar: # Só grava se o nome não estiver em branco
-                                    cursor.execute("""
-                                        INSERT INTO funcionarios (nome, cargo, pagamento, valor_hora, chave_pix)
-                                        VALUES (?, ?, ?, ?, ?)
-                                    """, (
-                                        nome_salvar,
-                                        linha_f.get("cargo", "Costureira"),
-                                        linha_f.get("pagamento", "Por hora"),
-                                        float(linha_f.get("valor_hora", 0.0)),
-                                        str(linha_f.get("chave_pix", "")).strip()
-                                    ))
-                                    
-                            conn.commit()
-                            conn.close()
-                            
-                            # 4. Atualiza a memória viva do sistema e recarrega a página limpa
-                            carregar_dados_do_banco_para_memoria()
-                            st.success("🎉 Sucesso! A lista de funcionários foi atualizada e salva permanentemente no HD!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Erro ao tentar salvar as alterações no banco de dados: {e}")
-                            
-                with col_conf_cancelar:
-                    if st.button("❌ Descartar Mudanças e Voltar", use_container_width=True, key="btn_cancelar_mudancas_lf_db"):
-                        # Limpa o cache limpando a chave da tabela e forçando o recarregamento dos dados do DB
-                        if chave_tabela_func in st.session_state:
-                            del st.session_state[chave_tabela_func]
-                        st.session_state.versao_editor_func += 1
-                        st.rerun()        
-        
-
-                 # --- SUB-PÁGINA: DASHBOARD INICIAL (Cards + Tabela + Gráficos juntos) ---
-    if st.session_state.pagina_admin_atual == "🏠 Dashboard Inicial":
-        st.subheader("🏠 Painel Executivo — Indicadores de Desempenho e Faturamento")
-        
-        # Filtros Globais de Mês e Ano no topo do Dashboard
-        col_m_dash, col_a_dash, col_esp_dash = st.columns(3)
-        with col_m_dash:
-            mes_sel = st.selectbox("Mês de Referência:", ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"], index=8, key="dash_ref_mes_v30")
-        with col_a_dash:
-            ano_sel = st.selectbox("Ano de Referência:", ["2026", "2027", "2028", "2029", "2030"], index=0, key="dash_ref_ano_v30")
-            
-        st.markdown(f"Exibindo balanço consolidado de: **{mes_sel} de {ano_sel}**")
-        st.markdown("<br>", unsafe_allow_html=True)
-        
-        meses_num = {"Janeiro":"01", "Fevereiro":"02", "Março":"03", "Abril":"04", "Maio":"05", "Junho":"06", "Julho":"07", "Agosto":"08", "Setembro":"09", "Outubro":"10", "Novembro":"11", "Dezembro":"12"}
-        mes_procurado = meses_num[mes_sel]
-
-        # --- MOTOR MATEMÁTICO AVANÇADO UNIFICADO ---
-        entradas_livro_caixa = 0.0
-        total_saidas_eg = 0.0
-        
-        # 1. Varre o Livro Caixa Geral para somar as Entradas e Saídas do mês
-        if "movimentacoes_caixa" in st.session_state and st.session_state.movimentacoes_caixa:
-            for mov in st.session_state.movimentacoes_caixa:
-                data_mov = mov.get("Data", "")
-                if f"/{mes_procurado}/{ano_sel}" in data_mov or data_mov == "":
-                    v_total = mov.get("Valor Total", 0.0)
-                    if mov.get("Tipo", "Saída") == "Entrada":
-                        entradas_livro_caixa += v_total
-                    else:
-                        total_saidas_eg += v_total
-
-        # 2. REQUISITO EXIGIDO: Faturamento real blindado (Preço Unitário × Peças Prontas Reais do Conferente)
-        faturamento_lotes_concluidos = 0.0
-        if "lotes_gerais" in st.session_state and st.session_state.lotes_gerais:
-            for item in st.session_state.lotes_gerais:
-                data_cad_str = item.get("data_cadastro", "")
-                status_atual = str(item.get("status", "Pendente")).strip()
-                
-                # O faturamento continua filtrado pelo mês/ano selecionado no topo do Dashboard
-                if f"/{mes_procurado}/{ano_sel}" in data_cad_str and status_atual == "Concluído":
-                    try:
-                        # Puxa o preço e a produção física real digitada
-                        preco_unitario = float(item.get("preco_unitario", item.get("preco", 0.0)))
-                        pecas_reais_produzidas = int(item.get("qtd_pronta", 0))
-                        
-                        # BLINDAGEM DE ENGENHARIA: Se o manual resetou para 0, busca a quantidade cadastrada original
-                        if pecas_reais_produzidas == 0:
-                            pecas_reais_produzidas = int(item.get("qtd_prevista", item.get("qtd", 0)))
-                        
-                        faturamento_lotes_concluidos += (preco_unitario * pecas_reais_produzidas)
-                    except Exception as e:
-                        pass
-
-        # TOTALIZADOR DA ENTRADA DE CAIXA LEGÍTIMO DA DLR
-        total_entradas_eg = entradas_livro_caixa + faturamento_lotes_concluidos
-
-       
-        # 3. Varre a Folha Interna calculando os valores líquidos com vales ativos
-        total_folha_interna = 0.0
-        if "funcionarios" in st.session_state:
-            # Inicializa o banco de horas se o pen drive não tiver sido lido ainda
-            if "presencas_ponto" not in st.session_state:
-                st.session_state.presencas_ponto = {}
-                
-            for f in st.session_state.funcionarios:
-                bruto_colaborador = 0.0
-                nome_f = f["nome"]
-                nome_f_chave = nome_f.strip().title() # Padroniza para cruzar com o ponto
-                tipo_pag = f.get("pagamento", "Fixo")
-                valor_base = float(f.get("valor_hora", 0.0)) # Seu campo de salário ou valor/h
-                
-                # --- REGRA DE OURO OPERACIONAL EXIGIDA ---
-                if tipo_pag == "Fixo":
-                    # REGRA 1: Pagamento Fixo puxa o salário cheio direto
-                    bruto_colaborador = valor_base
-                elif tipo_pag == "Por operação":
-                    # REGRA 2: Quem trabalha por Operação (Lotes) fica zerado na folha interna
-                    bruto_colaborador = 0.0
-                elif tipo_pag == "Por hora":
-                        horas_relogio = 0.0
-                        
-                        # Captura as variáveis de data de forma dinâmica
-                        v_mes_tela = mes_sel if 'mes_sel' in locals() else (mes_prod_sel if 'mes_prod_sel' in locals() else "Setembro")
-                        v_ano_tela = ano_sel if 'ano_sel' in locals() else (ano_prod_sel if 'ano_prod_sel' in locals() else "2026")
-                        
-                        m_f_c = meses_num.get(v_mes_tela, "09")
-                        chave_periodo_pesquisa = f"{m_f_c}/{v_ano_tela}"
-                        
-                        # BARREIRA DE PROTEÇÃO ÚNICA: Varre o DB comparando em letras minúsculas
-                        if "banco_horas_permanente" in st.session_state:
-                            for reg_h in st.session_state.banco_horas_permanente:
-                                if reg_h.get("mes_ano") == chave_periodo_pesquisa:
-                                    if str(reg_h.get("nome")).strip().lower() == str(nome_f).strip().lower():
-                                        horas_relogio = float(reg_h.get("total_horas", 0.0))
-                                        break
-                                        
-                        bruto_colaborador = horas_relogio * valor_base
-                    
-                # Deduz os vales parcelados ativos do mês atual
-                total_descontos_mes = 0.0
-                if "adiantamentos" in st.session_state:
-                    for ad in st.session_state.adiantamentos:
-                        if ad.get("nome") == nome_f and ad.get("status_vale", "Ativo") != "Cancelado":
-                            try:
-                                dt_v = datetime.strptime(ad.get("data", ""), "%d/%m/%Y")
-                                m_origem = dt_v.month; a_origem = dt_v.year
-                            except:
-                                m_origem = int(mes_procurado); a_origem = int(ano_sel)
-                            
-                            texto_t = ad.get("tipo", "1x")
-                            q_parc = 1
-                            for x in range(1, 4):
-                                if f"{x}x" in texto_t: q_parc = x; break
-                                
-                            m_corrido = m_origem; a_corrido = a_origem; m_cobrancas = []
-                            for _ in range(q_parc):
-                                m_cobrancas.append(f"{m_corrido:02d}/{a_corrido}")
-                                m_corrido += 1
-                                if m_corrido > 12: m_corrido = 1; a_corrido += 1
-                                
-                            if f"{mes_procurado}/{ano_sel}" in m_cobrancas:
-                                total_descontos_mes += ad.get("valor_parcela", 0.0)
-                                
-                liquido_a_receber = max(0.0, bruto_colaborador - total_descontos_mes)
-                total_folha_interna += liquido_a_receber
-
-        # --- MOTOR DE GASTOS DO PAINEL EXECUTIVO COM AS CHAVES REAIS DA DLR (5 COLUNAS) ---
-        
-        # 1. CÁLCULO DA FOLHA EXTERNA (Lê as chaves exatas: "Valor por peça", "QTD de Peças" e "Status")
-        total_folha_externa = 0.0
-        if "lotes_externos" in st.session_state and st.session_state.lotes_externos:
-            chave_periodo_externo = f"/{mes_procurado}/{ano_sel}" # Ex: /09/2026
-            
-            for item_ext in st.session_state.lotes_externos:
-                data_ext = str(item_ext.get("Data", "")).strip()
-                status_ext = str(item_ext.get("Status", "Em andamento")).strip().lower()
-                
-                # FILTRO DE SEGURANÇA: Bate o mês/ano selecionado E exige o Status "Concluído"
-                if ((chave_periodo_externo in data_ext) or (data_ext == "")) and (status_ext == "concluído"):
-                    try:
-                        v_peca = float(item_ext.get("Valor por peça", 0.0))
-                        qtd_pecas = int(item_ext.get("QTD de Peças", 0))
-                        desconto_lote = float(item_ext.get("Desconto", 0.0)) # Puxa o desconto do lote
-                        
-                        # A MATEMÁTICA CORRETA: Soma o total já batido o desconto!
-                        total_folha_externa += ((v_peca * qtd_pecas) - desconto_lote)
-                    except Exception as e:
-                        pass
-
-        # --- CÁLCULO MATEMÁTICO DO SALDO LÍQUIDO RECALIBRADO ---
-        saldo_liquido_final = total_entradas_eg - total_saidas_eg - total_folha_interna - total_folha_externa
-
-        # 3. RENDERIZAÇÃO FORMATADA DOS 5 CARDS LADO A LADO NA TELA
-        col_c1, col_c2, col_c3, col_c4, col_c5 = st.columns(5)
-
-        with col_c1:
-            st.markdown(f"""
-                <div style='background-color: #2E7D32; padding: 15px; border-radius: 8px; color: white; text-align: center; height: 110px;'>
-                    <span style='font-size: 14px;'>💵 Entrada Caixa</span><br>
-                    <span style='font-size: 20px; font-weight: bold;'>R$ {total_entradas_eg:,.2f}</span>
-                </div>
-            """, unsafe_allow_html=True)
-
-        with col_c2:
-            st.markdown(f"""
-                <div style='background-color: #E65100; padding: 15px; border-radius: 8px; color: white; text-align: center; height: 110px;'>
-                    <span style='font-size: 14px;'>📦 Saídas Gerais</span><br>
-                    <span style='font-size: 20px; font-weight: bold;'>R$ {total_saidas_eg:,.2f}</span>
-                </div>
-            """, unsafe_allow_html=True)
-
-        with col_c3:
-            st.markdown(f"""
-                <div style='background-color: #C62828; padding: 15px; border-radius: 8px; color: white; text-align: center; height: 110px;'>
-                    <span style='font-size: 14px;'>🧱 Folha Interna</span><br>
-                    <span style='font-size: 20px; font-weight: bold;'>R$ {total_folha_interna:,.2f}</span>
-                </div>
-            """, unsafe_allow_html=True)
-
-        with col_c4:
-            st.markdown(f"""
-                <div style='background-color: #B71C1C; padding: 15px; border-radius: 8px; color: white; text-align: center; height: 110px;'>
-                    <span style='font-size: 14px;'>🧵 Folha Externo</span><br>
-                    <span style='font-size: 20px; font-weight: bold;'>R$ {total_folha_externa:,.2f}</span>
-                </div>
-            """, unsafe_allow_html=True)
-
-        with col_c5:
-            # Cor do saldo muda dinamicamente: Azul se positivo, Vermelho escuro se negativo
-            cor_saldo_box = "#1565C0" if saldo_liquido_final >= 0 else "#811C1C"
-            st.markdown(f"""
-                <div style='background-color: {cor_saldo_box}; padding: 15px; border-radius: 8px; color: white; text-align: center; height: 110px;'>
-                    <span style='font-size: 14px;'>💰 Saldo Líquido</span><br>
-                    <span style='font-size: 20px; font-weight: bold;'>R$ {saldo_liquido_final:,.2f}</span>
-                </div>
-            """, unsafe_allow_html=True)
-            
-        st.markdown("<br><hr>", unsafe_allow_html=True)
-
-        # --- ESPELHAMENTO DO GRÁFICO DE RENDIMENTO BRUTO DIÁRIO ---
-        st.markdown(f"#### 📈 Gráfico de Rendimento Global: {mes_sel} de {ano_sel}")
-        st.write("Acompanhe o volume total de peças prontas faturadas e acumuladas no dia a dia da fábrica:")
-
-        if "banco_producao_diaria" not in st.session_state:
-            st.session_state.banco_producao_diaria = {}
-
-        dados_grafico_dash_bruto = []
-        
-        # Identifica a quantidade de dias correta do mês selecionado
-        if mes_procurado in ["01", "03", "05", "07", "08", "10", "12"]: 
-            dias_no_mes_dash = 31
-        elif mes_procurado in ["04", "06", "09", "11"]: 
-            dias_no_mes_dash = 30
-        else: 
-            dias_no_mes_dash = 28
-
-        # Loop estruturado para montar o gráfico com todos os dias sequenciais
-        for d_painel in range(1, dias_no_mes_dash + 1):
-            data_chave_painel = f"{d_painel:02d}/{mes_procurado}/{ano_sel}"
-            total_pecas_da_data = st.session_state.banco_producao_diaria.get(data_chave_painel, 0)
-            
-            dados_grafico_dash_bruto.append({
-                "Dia do Mês": f"Dia {d_painel:02d}",
-                "Peças Prontas (Total Fábrica)": total_pecas_da_data
-            })
-
-        # Desenha o gráfico de barras espelhado no painel principal
-        st.bar_chart(
-            data=dados_grafico_dash_bruto, 
-            x="Dia do Mês", 
-            y="Peças Prontas (Total Fábrica)", 
-            use_container_width=True, 
-            height=340
-        )
-        
-        # Resumo final informativo abaixo do gráfico
-        soma_acumulada_dash = sum([item_g["Peças Prontas (Total Fábrica)"] for item_g in dados_grafico_dash_bruto])
-        st.info(f"📊 **Totalizadores do Período:** O volume total acumulado produzido em {mes_sel} somou **{soma_acumulada_dash} peças prontas** na esteira!")
-    
-    if st.session_state.pagina_admin_atual == "🚚 Serviços Externos":
-        st.subheader("🚚 Gerenciamento de Serviços Externos")
-        
-        if "lotes_externos" not in st.session_state:
-            st.session_state.lotes_externos = []
-            
-        if "contador_form_externo" not in st.session_state:
-            st.session_state.contador_form_externo = 0
-            
-        # --- COLETA AUTOMÁTICA DE OFs E REFERÊNCIAS DA ESTEIRA GERAL ---
-        lista_ofs_cadastrados = []
-        mapa_of_para_referencia = {}
-        
-        if "lotes_gerais" in st.session_state and st.session_state.lotes_gerais:
-            for lote in st.session_state.lotes_gerais:
-                v_of = str(lote.get("of", lote.get("O.F.", ""))).strip()
-                v_ref = str(lote.get("referencia", lote.get("Referência", ""))).strip()
-                if v_of and v_of not in lista_ofs_cadastrados:
-                    lista_ofs_cadastrados.append(v_of)
-                    mapa_of_para_referencia[v_of] = v_ref
-                    
-        chave_reset_ext = st.session_state.contador_form_externo
-        todos_funcs = [f["nome"] for f in st.session_state.funcionarios] if "funcionarios" in st.session_state else []
-
-        # --- DESENHO DOS CAMPOS LIVRES DINÂMICOS NA TELA ---
-        col_ex1, col_ex2, col_ex3 = st.columns(3)
-        with col_ex1:
-            costureira_sel = st.selectbox("Selecionar Costureira", todos_funcs if todos_funcs else ["Nenhum funcionário cadastrado"], key=f"ext_cost_sel_{chave_reset_ext}")
-            
-            if lista_ofs_cadastrados:
-                of_input = st.selectbox("Selecionar Número do OF", ["Escolha um OF..."] + lista_ofs_cadastrados, key=f"ext_of_sel_{chave_reset_ext}")
-            else:
-                st.warning("⚠️ Nenhum lote ativo na esteira para puxar OF.")
-                of_input = "Escolha um OF..."
-                
-        with col_ex2:
-            # AUTOMAÇÃO EM TEMPO REAL: Atualiza a referência no exato milissegundo do clique do OF
-            if of_input != "Escolha um OF..." and of_input in mapa_of_para_referencia:
-                ref_sugerida = mapa_of_para_referencia[of_input]
-                ref_input = st.selectbox("Referência da Peça (Puxada do Lote)", [ref_sugerida], index=0, disabled=True, key=f"ext_ref_sel_{chave_reset_ext}")
-            else:
-                ref_input = st.selectbox("Referência da Peça", ["Aguardando OF..."], index=0, disabled=True, key=f"ext_ref_sel_{chave_reset_ext}")
-                
-            nome_peca_input = st.text_input("Nome da Peça (ex: Camiseta, Bermuda)", key=f"ext_nome_p_{chave_reset_ext}")
-            
-        with col_ex3:
-            valor_peca_input = st.number_input("Valor por Peça (R$)", min_value=0.0, format="%.2f", step=0.10, key=f"ext_v_p_{chave_reset_ext}")
-            qtd_input = st.number_input("Quantidade de Peças", min_value=1, step=50, value=1, key=f"ext_qtd_p_{chave_reset_ext}")
-            
-        st.markdown("<br>", unsafe_allow_html=True)
-        
-        # Botão clássico cinza posicionado perfeitamente na tela
-        registrar_ext = st.button("🚚 Registrar Lote Externo", use_container_width=True, key=f"btn_registrar_ext_fixo_{chave_reset_ext}")
-            
-        # --- MOTOR DE VALIDAÇÃO E GRAVAÇÃO COMPACTA NO HD ---
-        if registrar_ext:
-            if not todos_funcs:
-                st.error("❌ Cadastre primeiro um funcionário para registrar um serviço externo.")
-            elif of_input == "Escolha um OF..." or not nome_peca_input.strip():
-                st.error("❌ Selecione um OF válido e preencha o Nome da Peça para registrar!")
-            elif valor_peca_input <= 0:
-                st.error("❌ O valor por peça deve ser maior que R$ 0,00.")
-            else:
-                data_hoje = datetime.now().strftime("%d/%m/%Y")
-                
-                st.session_state.lotes_externos.append({
-                    "Data": data_hoje,
-                    "Nome": costureira_sel,
-                    "Número OF": of_input.strip(),
-                    "Referência da Peça": ref_input.strip(),
-                    "Nome da peça": nome_peca_input.strip(),
-                    "Valor por peça": valor_peca_input,
-                    "Desconto": 0.0,
-                    "QTD de Peças": int(qtd_input),
-                    "Status": "Em andamento",
-                    "Situação de Pagamento": "Pendente",
-                    "Chave PIX Customizada": ""
-                })
-                
-                # Tranca as informações no banco de dados do HD na mesma hora pelo robô
-                super_robo_trancar_memoria_para_hd()
-                
-                st.success("🎉 Lote externo cadastrado com sucesso de faturamento!")
-                st.session_state.contador_form_externo += 1
-                st.rerun()
-        
-        # --- REQUISITO EXIGIDO: FILTROS DE MÊS, ANO E BUSCA POR OF ---
-        st.markdown("<br><hr>", unsafe_allow_html=True)
-        st.markdown("### 📋 Histórico de Lançamentos e Controle de Serviços Externos")
-        
-        col_m_ext, col_a_ext, col_busca_combinada = st.columns(3)
-        with col_m_ext:
-            mes_ext_sel = st.selectbox("Filtrar por Mês:", ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"], index=8, key="filtro_mes_externo_final_v12")
-        with col_a_ext:
-            ano_ext_sel = st.selectbox("Filtrar por Ano:", ["2026", "2027", "2028", "2029", "2030"], index=0, key="filtro_ano_externo_final_v12")
-        with col_busca_combinada:
-            pesquisa_texto = st.text_input("🔍 Pesquisar por Nome ou OF:", key="busca_combinada_externo_input_v12").strip().lower()
-
-        st.write(f"Exibindo lotes ativos ou lançados em: **{mes_ext_sel} de {ano_ext_sel}**")
-        st.write("📝 **Dica do Chefe:** Dê dois cliques em **Status**, **Situação de Pagamento**, **Valor por peça** ou **QTD** para editar! A Chave PIX agora muda automática com a Lista de Funcionários.")
-
-        if "lotes_externos" in st.session_state and st.session_state.lotes_externos:
-            linhas_tabela_externos = []
-            meses_num = {"Janeiro":"01", "Fevereiro":"02", "Março":"03", "Abril":"04", "Maio":"05", "Junho":"06", "Julho":"07", "Agosto":"08", "Setembro":"09", "Outubro":"10", "Novembro":"11", "Dezembro":"12"}
-            mes_procurado = meses_num[mes_ext_sel]
-            
-            # CHAVE DA SOLUÇÃO: Dicionário atualizado em tempo real que lê o PIX direto da ficha oficial de funcionários
-            pix_funcionarios = {f["nome"]: f.get("chave_pix", "") for f in st.session_state.get("funcionarios", [])}
-            
-            for index, item in enumerate(st.session_state.lotes_externos):
-                data_lote = item.get("Data", "")
-                status_atual = item.get("Status", "Em andamento")
-                of_lote = item.get("Número OF", "")
-                nome_costureira = item.get("Nome", "")
-                
-                pertence_ao_mes = f"/{mes_procurado}/{ano_ext_sel}" in data_lote
-                continua_pendente = (status_atual == "Em andamento")
-                
-                if pertence_ao_mes or continua_pendente:
-                    if pesquisa_texto:
-                        if pesquisa_texto not in nome_costureira.lower() and pesquisa_texto not in of_lote.lower():
-                            continue
-                        
-                    v_peca = float(item.get("Valor por peça", 0.0))
-                    qtd = int(item.get("QTD de Peças", 0))
-                    desconto_lote = float(item.get("Desconto", 0.0)) # Puxa o desconto salvo no HD
-                    
-                    # VINCULAÇÃO REAL COM A GAVETA DE PIX
-                    chave_pix_viva = pix_funcionarios.get(nome_costureira, "Não cadastrado")
-                    
-                    # MATEMÁTICA REAL EXIGIDA: (Valor por peça × QTD) - Desconto
-                    valor_total_calculado = (v_peca * qtd) - desconto_lote
-                    
-                    linhas_tabela_externos.append({
-                        "ID_Original": index,
-                        "Data": data_lote,
-                        "Nome": nome_costureira,
-                        "Número OF": of_lote,
-                        "Referência da Peça": item.get("Referência da Peça", ""),
-                        "Nome da peça": item.get("Nome da peça", ""),
-                        "Valor por peça": v_peca,
-                        "QTD de Peças": qtd,
-                        "Desconto": desconto_lote, # Injeta na tabela visual
-                        "Valor total": valor_total_calculado, # Aplica a subtração na tela!
-                        "Status": status_atual,
-                        "Chave PIX": chave_pix_viva,
-                        "Situação de Pagamento": item.get("Situação de Pagamento", "Pendente")
-                    })
-            
-            if linhas_tabela_externos:
-                if "versao_editor_ext" not in st.session_state:
-                    st.session_state.versao_editor_ext = 0
-                    
-                chave_tabela_ext = f"editor_ext_v14_{mes_ext_sel}_{ano_ext_sel}_{pesquisa_texto}_v{st.session_state.versao_editor_ext}"
-                
-                tabela_ext_editada = st.data_editor(
-                    linhas_tabela_externos,
-                    column_config={
-                        "ID_Original": None,
-                        "Data": st.column_config.TextColumn("Data", disabled=True),
-                        "Nome": st.column_config.TextColumn("Nome", disabled=True),
-                        "Número OF": st.column_config.TextColumn("Número OF", disabled=True),
-                        "Referência da Peça": st.column_config.TextColumn("Referência da Peça", disabled=True),
-                        "Nome da peça": st.column_config.TextColumn("Nome da peça", disabled=True),
-                        "Valor por peça": st.column_config.NumberColumn("Valor por peça", format="R$ %.2f", min_value=0.0),
-                        "QTD de Peças": st.column_config.NumberColumn("QTD de Peças", min_value=1, step=1),
-                        "Desconto": st.column_config.NumberColumn("📉 Desconto (R$)", format="R$ %.2f", min_value=0.0), # Editável
-                        "Valor total": st.column_config.NumberColumn("Valor total", format="R$ %.2f", disabled=True), # Travado com o cálculo
-                        "Status": st.column_config.SelectboxColumn("Status", options=["Em andamento", "Cancelado", "Concluído"], required=True),
-                        "Chave PIX": st.column_config.TextColumn("🔑 Chave PIX", disabled=True),
-                        "Situação de Pagamento": st.column_config.SelectboxColumn("💳 Situação de Pagamento", options=["Pendente", "Pago"], required=True)
-                    },
-                    hide_index=True, use_container_width=True, key=chave_tabela_ext
-                )
-                
-                # MONITOR DE MUDANÇAS ATUALIZADO: Inclui a coluna 'Desconto' na varredura técnica
-                dados_mudaram = False
-                for linha in tabela_ext_editada:
-                    idx_global = linha["ID_Original"]
-                    original = st.session_state.lotes_externos[idx_global]
-                    
-                    if (float(linha["Valor por peça"]) != float(original.get("Valor por peça", 0.0)) or 
-                        int(linha["QTD de Peças"]) != int(original.get("QTD de Peças", 0)) or 
-                        float(linha.get("Desconto", 0.0)) != float(original.get("Desconto", 0.0)) or # <=== MONITOR DO DESCONTO ATIVADO!
-                        str(linha["Status"]).strip() != str(original.get("Status", "")).strip() or 
-                        str(linha["Situação de Pagamento"]).strip() != str(original.get("Situação de Pagamento", "Pendente")).strip()):
-                        dados_mudaram = True
-                        break
-                
-                # Exibe a trava amarela de segurança se houver mudanças digitadas
-                if dados_mudaram:
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    st.warning("⚠️ **Aviso de Alteração de Lotes:** Você modificou dados desta folha! Salve para computar os novos descontos e totais.")
-                    
-                    col_salvar_ext, col_cancelar_ext = st.columns(2)
-                    with col_salvar_ext:
-                        if st.button("💾 Confirmar Alterações do Lote Externo", use_container_width=True, type="primary", key="btn_salvar_ext_v14_f"):
-                            for linha in tabela_ext_editada:
-                                idx_global = linha["ID_Original"]
-                                
-                                st.session_state.lotes_externos[idx_global]["Valor por peça"] = float(linha["Valor por peça"])
-                                st.session_state.lotes_externos[idx_global]["QTD de Peças"] = int(linha["QTD de Peças"])
-                                st.session_state.lotes_externos[idx_global]["Desconto"] = float(linha.get("Desconto", 0.0)) # <=== GRAVA O DESCONTO NO COFRE!
-                                st.session_state.lotes_externos[idx_global]["Status"] = str(linha["Status"]).strip()
-                                st.session_state.lotes_externos[idx_global]["Situação de Pagamento"] = str(linha["Situação de Pagamento"]).strip()
-                            
-                            # Limpa o cache visual e tranca direto no arquivo .db do HD
-                            if chave_tabela_ext in st.session_state:
-                                del st.session_state[chave_tabela_ext]
-                            st.session_state.versao_editor_ext += 1
-                            
-                            super_robo_trancar_memoria_para_hd()
-                            st.success("🎉 Excelente! Todas as edições e descontos foram salvos com sucesso absoluto no HD!")
-                            st.rerun()
-                            
-                    with col_cancelar_ext:
-                        if st.button("❌ Descartar Mudanças e Voltar", use_container_width=True, key="btn_descartar_ext_v14_f"):
-                            if chave_tabela_ext in st.session_state:
-                                del st.session_state[chave_tabela_ext]
-                            st.session_state.versao_editor_ext += 1
-                            st.rerun()
-            else:
-                st.info("💡 Nenhum lote encontrado para os filtros selecionados.")
-        else:
-            st.info("💡 Nenhum lote de serviço externo registrado até o momento.")
-          
-
-    
-             # Sub-aba: Financeiro Geral
-    elif st.session_state.pagina_admin_atual == "💰 Financeiro Geral":
-        st.subheader("💰 Fluxo de Caixa Dinâmico — Entradas e Saídas")
-        
-        # INTERRUPTOR INTELIGENTE: Atualiza a tela no mesmo instante!
-        tipo_mov = st.selectbox(
-            "Tipo de Movimentação", 
-            ["Saída", "Entrada", "Saída (Vale de Funcionário)"],
-            key="fc_tipo_mov_v32"
-        )
-        
-        # Inicializa as variáveis de controle de fluxo e reset se não existirem
-        if "versao_form_caixa" not in st.session_state:
-            st.session_state.versao_form_caixa = 0
-        if "clicou_registrar_fc" not in st.session_state:
-            st.session_state.clicou_registrar_fc = False
-            
-        chave_reset_fc = st.session_state.versao_form_caixa
-
-        # --- CAMPOS DINÂMICOS LIVRES DE ALTA PERFORMANCE ---
-        if tipo_mov == "Saída (Vale de Funcionário)":
-            todos_funcs = [f["nome"] for f in st.session_state.funcionarios] if "funcionarios" in st.session_state else []
-            
-            if not todos_funcs:
-                st.warning("⚠️ Cadastre primeiro um funcionário na aba 'Cadastrar Funcionário' para liberar a lista.")
-                func_vale = "Nenhum cadastrado"
-            else:
-                func_vale = st.selectbox("Selecione o Funcionário que pediu o Vale", todos_funcs, key=f"fc_func_sel_{chave_reset_fc}")
-            
-            valor_mov = st.number_input("Valor do Vale (R$)", min_value=0.0, format="%.2f", step=10.0, key=f"fc_val_vale_{chave_reset_fc}")
-            parcelas = st.selectbox("Parcelar em quantas vezes? (Limite de 3x para Vales)", [1, 2, 3], index=0, key=f"fc_parc_vale_{chave_reset_fc}")
-            descricao_mov = f"Vale para {func_vale}"
-            
-        else:
-            func_vale = None
-            descricao_mov = st.text_input("Descrição / Motivo da Movimentação (Linha, Luz, Combustível, etc.)", key=f"fc_desc_geral_{chave_reset_fc}")
-            valor_mov = st.number_input("Valor Total (R$)", min_value=0.0, format="%.2f", step=50.0, key=f"fc_val_geral_{chave_reset_fc}")
-            
-            # CORREÇÃO CRÍTICA DA FIÇÃO: Adicionado a lista de parcelas de 1 a 12 corrigida
-            lista_opcoes_parcelas = list(range(1, 13))
-            parcelas = st.selectbox("Quantidade de parcelas (Se houver)", options=lista_opcoes_parcelas, index=0, key=f"fc_parc_geral_{chave_reset_fc}")
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # --- BOTÃO CLÁSSICO DE DISPARO INICIAL (FIXO NO LOCAL QUE VOCÊ CIRCULOU) ---
-        if not st.session_state.clicou_registrar_fc:
-            if st.button("💾 Registrar no Caixa", use_container_width=True, key=f"btn_disparo_inicial_fc_{chave_reset_fc}"):
-                # Valida os campos obrigatórios antes de abrir o aviso de confirmação
-                if valor_mov <= 0:
-                    st.error("❌ Por favor, digite um valor maior que R$ 0,00.")
-                elif tipo_mov != "Saída (Vale de Funcionário)" and not descricao_mov.strip():
-                    st.error("❌ Por favor, preencha a descrição do motivo desta movimentação.")
-                else:
-                    st.session_state.clicou_registrar_fc = True
-                    st.rerun()
-
-        # --- CONTROLADOR DO AVISO AMARELO (SÓ ABRE APÓS O CLIQUE NO BOTÃO ACIMA) ---
-        if st.session_state.clicou_registrar_fc:
-            st.warning(f"⚠️ **Aviso de Alteração de Caixa:** Tem certeza que deseja salvar o lançamento de **R$ {valor_mov:.2f}** como **{tipo_mov}**?")
-            
-            col_salvar_fc, col_cancelar_fc = st.columns(2)
-            
-            with col_salvar_fc:
-                if st.button("✅ Sim, confirmar e salvar", use_container_width=True, type="primary", key="btn_confirmar_caixa_v32"):
-                    data_hoje = datetime.now().strftime("%d/%m/%Y")
-                    
-                    if "movimentacoes_caixa" not in st.session_state:
-                        st.session_state.movimentacoes_caixa = []
-                        
-                    # Insere no Livro Caixa Geral da fábrica
-                    st.session_state.movimentacoes_caixa.append({
-                        "Data": data_hoje,
-                        "Tipo": "Saída" if "Saída" in tipo_mov else "Entrada",
-                        "Detalhe / Categoria": "Vale de Funcionário" if "Vale" in tipo_mov else "Geral",
-                        "Descrição": descricao_mov,
-                        "Valor Total": valor_mov,
-                        "Parcelas": parcelas
-                    })
-
-                    # Se for vale, cria o espelho automático para o desconto em folha
-                    if tipo_mov == "Saída (Vale de Funcionário)":
-                        tipo_registro = f"Adiantamento Parcelado de {parcelas}x" if parcelas > 1 else "Adiantamento Parcelado de 1x"
-                        if "adiantamentos" not in st.session_state:
-                            st.session_state.adiantamentos = []
-                            
-                        st.session_state.adiantamentos.append({
-                            "nome": func_vale, 
-                            "valor_bruto": valor_mov,
-                            "valor_parcela": valor_mov / parcelas,
-                            "tipo": tipo_registro,
-                            "data": data_hoje
-                        })
-                        
-                    # Tranca tudo direto no arquivo .db do HD em definitivo
-                    super_robo_trancar_memoria_para_hd()
-                    
-                    # Reseta os estados e limpa os campos da tela
-                    st.session_state.clicou_registrar_fc = False
-                    st.session_state.versao_form_caixa += 1
-                    
-                    st.success(f"🎉 Sucesso! {tipo_mov} de R$ {valor_mov:.2f} gravado com segurança absoluta no HD!")
-                    st.rerun()
-                    
-            with col_cancelar_fc:
-                if st.button("❌ Não, cancelar", use_container_width=True, key="btn_cancelar_caixa_v32"):
-                    st.session_state.clicou_registrar_fc = False
-                    st.rerun()
-
-    elif st.session_state.pagina_admin_atual == "📅 Extrato do Mês":
-        st.subheader("📅 Livro Caixa — Extrato de Todas as Movimentações")
-        
-        # Filtros de mês e ano retroativos
-        col_mes, col_ano, col_vazia = st.columns(3)
-        with col_mes:
-            mes_sel = st.selectbox(
-                "Selecionar Mês:",
-                ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"],
-                index=8
-            )
-        with col_ano:
-            ano_sel = st.selectbox(
-                "Selecionar Ano:",
-                ["2026", "2027", "2028", "2029", "2030"],
-                index=0
-            )
-            
-        st.write(f"Exibindo movimentações cronológicas referentes a: **{mes_sel} de {ano_sel}**")
-        
-        if "tipo_extrato_ativo" not in st.session_state:
-            st.session_state.tipo_extrato_ativo = "E.G"
-
-        # Seção dos três botões alinhados (E.G, E.V e F.P)
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_btn1, col_btn2, col_btn3, col_espaco = st.columns(4)
-        
-        with col_btn1:
-            if st.session_state.tipo_extrato_ativo == "E.G":
-                st.markdown("<style>button[key='btn_ext_geral'] { background-color: #FFFFFF !important; color: #000000 !important; font-weight: bold !important; border: 2px solid #4A154B !important; }</style>", unsafe_allow_html=True)
-            if st.button("📊 Extrato Geral (E.G)", use_container_width=True, key="btn_ext_geral"):
-                st.session_state.tipo_extrato_ativo = "E.G"
-                st.rerun()
-                
-        with col_btn2:
-            if st.session_state.tipo_extrato_ativo == "E.V":
-                st.markdown("<style>button[key='btn_ext_vale'] { background-color: #FFFFFF !important; color: #000000 !important; font-weight: bold !important; border: 2px solid #4A154B !important; }</style>", unsafe_allow_html=True)
-            if st.button("💸 Extrato de Vale (E.V)", use_container_width=True, key="btn_ext_vale"):
-                st.session_state.tipo_extrato_ativo = "E.V"
-                st.rerun()
-
-        with col_btn3:
-            if st.session_state.tipo_extrato_ativo == "F.P":
-                st.markdown("<style>button[key='btn_folha_pag'] { background-color: #FFFFFF !important; color: #000000 !important; font-weight: bold !important; border: 2px solid #4A154B !important; }</style>", unsafe_allow_html=True)
-            if st.button("📝 Folha de Pag. (F.P)", use_container_width=True, key="btn_folha_pag"):
-                st.session_state.tipo_extrato_ativo = "F.P"
-                st.rerun()
-
-        st.markdown("---")
-
-        meses_num = {"Janeiro":"01", "Fevereiro":"02", "Março":"03", "Abril":"04", "Maio":"05", "Junho":"06", "Julho":"07", "Agosto":"08", "Setembro":"09", "Outubro":"10", "Novembro":"11", "Dezembro":"12"}
-        mes_procurado = meses_num[mes_sel]
-
-        # --- TELA DO EXTRATO GERAL (E.G) ---
-        if st.session_state.tipo_extrato_ativo == "E.G":
-            st.markdown(f"#### 📂 Visualizando: Extrato Geral ({mes_sel}/{ano_sel})")
-            if "movimentacoes_caixa" in st.session_state and st.session_state.movimentacoes_caixa:
-                linhas_tabela_eg = []
-                saldo_acumulado = 0.0
-                for mov in st.session_state.movimentacoes_caixa:
-                    data_mov = mov.get("Data", "")
-                    if f"/{mes_procurado}/{ano_sel}" in data_mov or data_mov == "":
-                        v_total = mov.get("Valor Total", 0.0)
-                        tipo_m = mov.get("Tipo", "Saída")
-                        valor_final = -v_total if tipo_m == "Saída" else v_total
-                        saldo_acumulado += valor_final
-                        linhas_tabela_eg.append({"Data": data_mov, "Descrição": mov.get("Descrição", ""), "Valor": valor_final})
-                
-                if linhas_tabela_eg:
-                    linhas_tabela_eg.append({"Data": "", "Descrição": "📊 SALDO TOTAL DO CAIXA", "Valor": saldo_acumulado})
-                    st.dataframe(linhas_tabela_eg, column_config={"Data": st.column_config.TextColumn("Data", width="small"), "Descrição": st.column_config.TextColumn("Descrição"), "Valor": st.column_config.NumberColumn("Valor", format="R$ %.2f")}, hide_index=True, use_container_width=True)
-                    if saldo_acumulado < 0:
-                        st.error(f"🔴 Caixa Negativo: Saldo em **R$ {saldo_acumulado:,.2f}**".replace(",", "X").replace(".", ",").replace("X", "."))
-                    else:
-                        st.success(f"🟢 Caixa Positivo: Saldo em **R$ {saldo_acumulado:,.2f}**".replace(",", "X").replace(".", ",").replace("X", "."))
-                else:
-                    st.info(f"💡 Nenhuma movimentação em {mes_sel}/{ano_sel}.")
-            else:
-                st.info("💡 Nenhuma movimentação geral registrada.")
-                
-        # --- LÓGICA DO EXTRATO DE VALE (E.V) ---
-        elif st.session_state.tipo_extrato_ativo == "E.V":
-            st.markdown(f"#### 📂 Visualizando: Controle Individual de Vales e Histórico ({mes_sel}/{ano_sel})")
-            
-            todos_funcs = [f["nome"] for f in st.session_state.funcionarios] if "funcionarios" in st.session_state else []
-            
-            if not todos_funcs:
-                st.warning("⚠️ Cadastre funcionários no sistema para liberar laudos de históricos.")
-            else:
-                func_selecionado = st.selectbox("Pesquisar Funcionário para Histórico:", ["Escolha um funcionário..."] + todos_funcs, key="busca_hist_vales_v33_def_sinc")
-                
-                if func_selecionado != "Escolha um funcionário...":
-                    linhas_tabela_ev = []
-                    desconto_do_mes_selecionado = 0.0
-                    
-                    m_f_c = meses_num.get(mes_sel, "09")
-                    mes_tela_num = int(m_f_c)
-                    ano_tela_num = int(ano_sel)
-                    chave_tela_atual = f"{mes_tela_num:02d}/{ano_tela_num}"
-
-                    # 1. VARREDURA 1: Coleta vales registrados na tabela de Adiantamentos (E.V)
-                    if "adiantamentos" in st.session_state:
-                        for index, ad in enumerate(st.session_state.adiantamentos):
-                            if str(ad.get("nome")).strip().lower() == str(func_selecionado).strip().lower() and ad.get("status_vale", "Ativo") != "Cancelado":
-                                data_ad = ad.get("data", "")
-                                v_bruto = float(ad.get("valor_bruto", 0.0))
-                                v_parcela = float(ad.get("valor_parcela", v_bruto))
-                                
-                                try: dt_v = datetime.strptime(data_ad, "%d/%m/%Y"); m_orig = dt_v.month; a_orig = dt_v.year
-                                except: m_orig = mes_tela_num; a_orig = ano_tela_num
-                                
-                                texto_t = ad.get("tipo", "1x")
-                                q_parc = 1
-                                for x in range(1, 4):
-                                    if f"{x}x" in texto_t: q_parc = x; break
-                                    
-                                m_cobrancas = []
-                                m_corrido = m_orig; a_corrido = a_orig
-                                for _ in range(q_parc):
-                                    m_cobrancas.append(f"{m_corrido:02d}/{a_corrido}")
-                                    m_corrido += 1
-                                    if m_corrido > 12: m_corrido = 1; a_corrido += 1
-                                    
-                                if chave_tela_atual in m_cobrancas:
-                                    num_parcela_atual = m_cobrancas.index(chave_tela_atual) + 1
-                                    desconto_do_mes_selecionado += v_parcela
-                                    linhas_tabela_ev.append({
-                                        "ID_Original": f"ADV_{index}",
-                                        "Data Lançamento": data_ad,
-                                        "Origem / Descrição": f"Vale Parcelado ({num_parcela_atual}/{q_parc})",
-                                        "Valor Total Emprestado": v_bruto,
-                                        "Valor Parcela deste Mês": v_parcela,
-                                        "Status": f"Ativo ({num_parcela_atual}/{q_parc})",
-                                        "Dar Baixa / Excluir": False
-                                    })
-
-                    # 2. VARREDURA 2: Coleta vales registrados no Fluxo de Caixa Dinâmico (Financeiro Geral)
-                    if "movimentacoes_caixa" in st.session_state and st.session_state.movimentacoes_caixa:
-                        for index, mov in enumerate(st.session_state.movimentacoes_caixa):
-                            data_mov = mov.get("Data", "")
-                            descricao_mov = str(mov.get("Descrição", "")).strip().lower()
-                            
-                            if ("vale" in descricao_mov or "adiantamento" in descricao_mov) and (str(func_selecionado).lower() in descricao_mov):
-                                try: dt_m = datetime.strptime(data_mov, "%d/%m/%Y"); m_orig = dt_m.month; a_orig = dt_m.year
-                                except: m_orig = mes_tela_num; a_orig = ano_tela_num
-                                
-                                try: q_parc_caixa = int(mov.get("Parcelas", mov.get("Quantidade de parcelas", 1)))
-                                except: q_parc_caixa = 1
-                                
-                                v_bruto_caixa = float(mov.get("Valor Total", 0.0))
-                                v_parcela_caixa = v_bruto_caixa / q_parc_caixa
-                                
-                                m_cobrancas_caixa = []
-                                m_corrido = m_orig; a_corrido = a_orig
-                                for _ in range(q_parc_caixa):
-                                    m_cobrancas_caixa.append(f"{m_corrido:02d}/{a_corrido}")
-                                    m_corrido += 1
-                                    if m_corrido > 12: m_corrido = 1; a_corrido += 1
-                                    
-                                if chave_tela_atual in m_cobrancas_caixa:
-                                    num_parcela_atual = m_cobrancas_caixa.index(chave_tela_atual) + 1
-                                    desconto_do_mes_selecionado += v_parcela_caixa
-                                    linhas_tabela_ev.append({
-                                        "ID_Original": f"CX_{index}",
-                                        "Data Lançamento": data_mov,
-                                        "Origem / Descrição": f"Fluxo de Caixa — Vale ({num_parcela_atual}/{q_parc_caixa})",
-                                        "Valor Total Emprestado": v_bruto_caixa,
-                                        "Valor Parcela deste Mês": v_parcela_caixa,
-                                        "Status": f"Ativo ({num_parcela_atual}/{q_parc_caixa})",
-                                        "Dar Baixa / Excluir": False
-                                    })
-                    
-                    # --- DESENHO DA TELA ATUALIZADA ---
-                    st.markdown(f"### 📋 Histórico de Vales: **{func_selecionado}**")
-                    
-                    # Atualiza o Card Vermelho com a soma real de todas as parcelas do mês
-                    desc_mes_br = f"{desconto_do_mes_selecionado:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                    st.markdown(f"<div style='background-color: #B71C1C; padding: 12px; border-radius: 6px; color: white; text-align: center; max-width: 400px; margin-bottom: 20px;'><b>Desconto Ativo em {mes_sel}/{ano_sel}</b><br><h3>R$ {desc_mes_br}</h3></div>", unsafe_allow_html=True)
-                    
-                    if linhas_tabela_ev:
-                        # DESENHO DA PLANILHA DO ADMIN COM A COLUNA DE EXCLUSÃO ATIVADA
-                        ev_editado = st.data_editor(
-                            linhas_tabela_ev,
-                            column_config={
-                                "ID_Original": None,
-                                "Data Lançamento": st.column_config.TextColumn("📅 Data Lançamento", disabled=True),
-                                "Origem / Descrição": st.column_config.TextColumn("📝 Origem / Descrição", disabled=True),
-                                "Valor Total Emprestado": st.column_config.NumberColumn("💰 Total Emprestado", format="R$ %.2f", disabled=True),
-                                "Valor Parcela deste Mês": st.column_config.NumberColumn("📉 Parcela do Mês", format="R$ %.2f", disabled=True),
-                                "Status": st.column_config.TextColumn("📌 Status", disabled=True),
-                                "Dar Baixa / Excluir": st.column_config.CheckboxColumn("🗑️ Dar Baixa / Excluir")
-                            },
-                            hide_index=True, use_container_width=True, key=f"tab_ev_individual_admin_v36_{func_selecionado}"
-                        )
-                        
-                        # VERIFICAÇÃO DE EXCLUSÃO BLINDADA DO ADMIN
-                        algum_vale_marcado = any(linha.get("Dar Baixa / Excluir", False) for linha in ev_editado)
-                        
-                        if algum_vale_marcado:
-                            st.markdown("<br>", unsafe_allow_html=True)
-                            st.warning(f"⚠️ **Confirmação de Baixa:** Deseja remover permanentemente o(s) vale(s) selecionado(s) de {func_selecionado}?")
-                            
-                            if st.button("🗑️ Confirmar Remoção do Vale Selecionado", use_container_width=True, type="primary", key="btn_remover_vale_caixa_admin_v36"):
-                                novas_movimentacoes = []
-                                for idx_cx, mov_cx in enumerate(st.session_state.movimentacoes_caixa):
-                                    foi_deletado = False
-                                    for linha_tela in ev_editado:
-                                        if linha_tela.get("Dar Baixa / Excluir") and linha_tela.get("ID_Original") == f"CX_{idx_cx}":
-                                            foi_deletado = True
-                                            break
-                                    if not foi_deletado:
-                                        novas_movimentacoes.append(mov_cx)
-                                
-                                st.session_state.movimentacoes_caixa = novas_movimentacoes
-                                st.success("🎉 Sucesso! O vale foi removido dos lançamentos e a folha recalculada!")
-                                st.rerun()
-                    else:
-                        st.info(f"💡 Nenhum vale ativo ou cobrança de parcela para {func_selecionado}.")
-
-        # --- TELA DA FOLHA DE PAGAMENTO (F.P) ---
-        elif st.session_state.tipo_extrato_ativo == "F.P":
-            st.markdown(f"#### 📂 Visualizando: Folha de Pagamento Completa")
-            if "funcionarios" in st.session_state and st.session_state.funcionarios:
-                if "status_folha_pagamento" not in st.session_state:
-                    st.session_state.status_folha_pagamento = {}
-                
-                linhas_fp = []
-                for f in st.session_state.funcionarios:
-                    nome_f = f["nome"]
-                    tipo_pag = f.get("pagamento", "Fixo")
-                    valor_base = float(f.get("valor_hora", 0.0))
-                    chave_pix_f = f.get("chave_pix", "Não cadastrada")
-                    
-                    # --- MOTOR FINANCEIRO INTEGRADO AO BANCO DE DADOS DA DLR ---
-                    if tipo_pag == "Fixo":
-                        bruto_colaborador = valor_base
-                    elif tipo_pag == "Por operação":
-                        bruto_colaborador = 0.0
-                    elif tipo_pag == "Por hora":
-                        horas_relogio = 0.0
-                        
-                        m_f_c = meses_num.get(mes_sel, "09")
-                        chave_periodo_pesquisa = f"{m_f_c}/{ano_sel}"
-                        
-                        if "banco_horas_permanente" in st.session_state:
-                            for reg_h in st.session_state.banco_horas_permanente:
-                                if reg_h.get("mes_ano") == chave_periodo_pesquisa:
-                                    if str(reg_h.get("nome")).strip().lower() == str(nome_f).strip().lower():
-                                        horas_relogio = float(reg_h.get("total_horas", 0.0))
-                                        break
-                                        
-                        bruto_colaborador = horas_relogio * valor_base
-                    else:
-                        bruto_colaborador = 0.0
-
-                    # --- CONTROLE DE DESCONTOS DE VALES PARCELADOS ---
-                    total_descontos_mes = 0.0
-                    
-                    # 1. Busca vales oficiais registrados na tabela de Adiantamentos (E.V)
-                    if "adiantamentos" in st.session_state:
-                        for ad in st.session_state.adiantamentos:
-                            if str(ad.get("nome")).strip().lower() == str(nome_f).strip().lower() and ad.get("status_vale", "Ativo") != "Cancelado":
-                                try:
-                                    dt_v = datetime.strptime(ad.get("data", ""), "%d/%m/%Y")
-                                    m_origem = dt_v.month; a_origem = dt_v.year
-                                except:
-                                    m_origem = int(meses_num.get(mes_sel, "09")); a_origem = int(ano_sel)
-                                
-                                texto_t = ad.get("tipo", "1x")
-                                q_parc = 1
-                                for x in range(1, 4):
-                                    if f"{x}x" in texto_t: q_parc = x; break
-                                    
-                                m_corrido = m_origem; a_corrido = a_origem; m_cobrancas = []
-                                for _ in range(q_parc):
-                                    m_cobrancas.append(f"{m_corrido:02d}/{a_corrido}")
-                                    m_corrido += 1
-                                    if m_corrido > 12: m_corrido = 1; a_corrido += 1
-                                    
-                                if f"{meses_num.get(mes_sel, '09')}/{ano_sel}" in m_cobrancas:
-                                    total_descontos_mes += ad.get("valor_parcela", 0.0)
-
-                    # 2. PONTE AUTOMÁTICA EXIGIDA: Varre o Extrato Geral procurando menções textuais de vales lançados
-                    if "movimentacoes_caixa" in st.session_state and st.session_state.movimentacoes_caixa:
-                        m_f_c = meses_num.get(mes_sel, "09")
-                        mes_tela_num = int(m_f_c)
-                        ano_tela_num = int(ano_sel)
-                        
-                        for mov in st.session_state.movimentacoes_caixa:
-                            data_mov = mov.get("Data", "")
-                            descricao_mov = str(mov.get("Descrição", "")).strip().lower()
-                            
-                            # Verifica se o lançamento é um vale ou adiantamento para esta funcionária específica
-                            if ("vale" in descricao_mov or "adiantamento" in descricao_mov) and (str(nome_f).lower() in descricao_mov):
-                                try:
-                                    dt_mov = datetime.strptime(data_mov, "%d/%m/%Y")
-                                    mes_origem = dt_mov.month
-                                    ano_origem = dt_mov.year
-                                except:
-                                    mes_origem = mes_tela_num; ano_origem = ano_tela_num
-                                
-                                # Captura quantas parcelas foram registradas no formulário (ex: 1, 2, 3)
-                                try: q_parc_caixa = int(mov.get("Parcelas", mov.get("Quantidade de parcelas", 1)))
-                                except: q_parc_caixa = 1
-                                
-                                v_bruto_caixa = float(mov.get("Valor Total", 0.0))
-                                v_parcela_caixa = v_bruto_caixa / q_parc_caixa
-                                
-                                # MOTOR CRONOLÓGICO: Gera os meses em que esse vale do Financeiro Geral deve cobrar
-                                m_cobrancas_caixa = []
-                                m_corrido = mes_origem; a_corrido = ano_origem
-                                for _ in range(q_parc_caixa):
-                                    m_cobrancas_caixa.append(f"{m_corrido:02d}/{a_corrido}")
-                                    m_corrido += 1
-                                    if m_corrido > 12: m_corrido = 1; a_corrido += 1
-                                
-                                # Se o mês que o chefe está olhando na tela for um dos meses de cobrança da parcela
-                                chave_mes_atual_tela = f"{mes_tela_num:02d}/{ano_tela_num}"
-                                if chave_mes_atual_tela in m_cobrancas_caixa:
-                                    # Desconta apenas o valor da parcela fracionada!
-                                    total_descontos_mes += v_parcela_caixa
-                    
-                    liquido_a_receber = max(0.0, bruto_colaborador - total_descontos_mes)
-                    texto_desconto = f"-R$ {total_descontos_mes:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if total_descontos_mes > 0 else ""
-                    chave_status = f"{nome_f}_{mes_sel}_{ano_sel}"
-                    
-                    # 1. Puxa primeiro o status que o seu super robô trancou na ficha real do funcionário
-                    status_ficha_real = f.get("status_pagamento_mes", "Pendente")
-                    if status_ficha_real not in ["Pendente", "Pago"]:
-                        status_ficha_real = "Pendente"
-                        
-                    # 2. Mantém a compatibilidade com a gaveta de meses da tela sem resetar o valor
-                    if status_ficha_real == "Pago":
-                        st.session_state.status_folha_pagamento[chave_status] = "Pago"
-                    elif chave_status not in st.session_state.status_folha_pagamento: 
-                        st.session_state.status_folha_pagamento[chave_status] = "Pendente"
-                    
-                    linhas_fp.append({
-                        "Funcionário": nome_f,
-                        "Chave PIX": chave_pix_f, 
-                        "Desconto de Vale": texto_desconto,
-                        "Valor a receber": liquido_a_receber,
-                        "Status": st.session_state.status_folha_pagamento[chave_status]
-                    })
-                
-                # --- SOLUÇÃO DO COMPORTAMENTO VAZIO: RENDERIZADOR DA PLANILHA ---
-                if linhas_fp:
-                    folha_editada = st.data_editor(
-                        linhas_fp,
-                        column_config={
-                            "Funcionário": st.column_config.TextColumn("Funcionário", disabled=True),
-                            "Chave PIX": st.column_config.TextColumn("🔑 Chave PIX", disabled=True),
-                            "Desconto de Vale": st.column_config.TextColumn("Desconto de Vale", disabled=True),
-                            "Valor a receber": st.column_config.NumberColumn("Valor a receber", format="R$ %.2f", disabled=True),
-                            "Status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Pago"], required=True)
-                        },
-                        hide_index=True, use_container_width=True, key=f"editor_folha_admin_v30_{mes_sel}_{ano_sel}"
-                    )
-                    for item in folha_editada: 
-                        st.session_state.status_folha_pagamento[f"{item['Funcionário']}_{mes_sel}_{ano_sel}"] = item["Status"]
-            else: 
-                st.warning("⚠️ Nenhum funcionário localizado na base permanente do banco de dados.")
-                    
-
-    # 3. CONFERENTE: PROGRESSO DE LOTES
-    elif st.session_state.pagina_admin_atual == "📋 Lotes em Andamento":
-        st.subheader("📋 Painel de Monitoramento — Lotes em Andamento")
-        
-        # Filtros de Mês e Ano adicionados no topo do Admin para gerenciar o período de auditoria
-        col_m_prod_a, col_a_prod_a, col_espaco_prod_a = st.columns(3)
-        with col_m_prod_a:
-            mes_prod_sel = st.selectbox("Filtrar por Mês:", ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"], index=8, key="filtro_mes_esteira_ap_admin_v25")
-        with col_a_prod_a:
-            ano_prod_sel = st.selectbox("Filtrar por Ano:", ["2026", "2027", "2028", "2029", "2030"], index=0, key="filtro_ano_esteira_ap_admin_v25")
-            
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        if "lotes_gerais" in st.session_state and st.session_state.lotes_gerais:
-            # --- MOTOR DE CÁLCULO DOS 4 CARDS NO ADMIN ---
-            qtd_pendentes = 0
-            qtd_em_producao = 0
-            qtd_vencidos = 0
-            qtd_concluidos = 0
-            data_hoje_dt = datetime.now().date()
-            
-            meses_num = {"Janeiro":"01", "Fevereiro":"02", "Março":"03", "Abril":"04", "Maio":"05", "Junho":"06", "Julho":"07", "Agosto":"08", "Setembro":"09", "Outubro":"10", "Novembro":"11", "Dezembro":"12"}
-            mes_procurado = meses_num[mes_prod_sel]
-            chave_mes_ano_filtro = f"/{mes_procurado}/{ano_prod_sel}"
-            
-            for item in st.session_state.lotes_gerais:
-                data_cad_str = item.get("data_cadastro", datetime.now().strftime("%d/%m/%Y"))
-                data_ent_str = item.get("data_entrega", "")
-                status_atual = item.get("status", "Pendente")
-                
-                # Regra idêntica de rolagem viva para contagem precisa dos cards do chefe
-                if (chave_mes_ano_filtro in data_cad_str) or (status_atual in ["Pendente", "Em produção", "Em production"]):
-                    try: data_entrega_dt = datetime.strptime(data_ent_str, "%d/%m/%Y").date()
-                    except: data_entrega_dt = None
-                    
-                    if status_atual == "Pendente":
-                        qtd_pendentes += 1
-                    elif status_atual in ["Em produção", "Em production"]:
-                        qtd_em_producao += 1
-                    elif status_atual == "Concluído":
-                        qtd_concluidos += 1
-                        
-                    if data_entrega_dt and status_atual != "Concluído" and data_hoje_dt > data_entrega_dt:
-                        qtd_vencidos += 1
-
-            # --- DESENHO DOS 4 CARDS COLORIDOS HORIZONTAIS NO ADMIN ---
-            card_a1, card_a2, card_a3, card_a4 = st.columns(4)
-            with card_a1:
-                st.markdown(f"<div style='background-color: #EF6C00; padding: 15px; border-radius: 8px; color: white; text-align: center;'><b>Lotes Pendentes</b><br><h2>{qtd_pendentes}</h2></div>", unsafe_allow_html=True)
-            with card_a2:
-                st.markdown(f"<div style='background-color: #2E7D32; padding: 15px; border-radius: 8px; color: white; text-align: center;'><b>Em Produção</b><br><h2>{qtd_em_producao}</h2></div>", unsafe_allow_html=True)
-            with card_a3:
-                st.markdown(f"<div style='background-color: #C62828; padding: 15px; border-radius: 8px; color: white; text-align: center;'><b>Lotes Vencidos</b><br><h2>{qtd_vencidos}</h2></div>", unsafe_allow_html=True)
-            with card_a4:
-                st.markdown(f"<div style='background-color: #1565C0; padding: 15px; border-radius: 8px; color: white; text-align: center;'><b>Concluídos</b><br><h2>{qtd_concluidos}</h2></div>", unsafe_allow_html=True)
-                
-            st.markdown("<br><hr>", unsafe_allow_html=True)
-            st.info("🔒 **Espelho de Auditoria:** Visão geral da esteira ativa em tempo real. Edições bloqueadas para o perfil Administrador.")
-
-            linhas_tabela_ap = []
-            for index, item in enumerate(st.session_state.lotes_gerais):
-                    data_cad_str = item.get("data_cadastro", datetime.now().strftime("%d/%m/%Y"))
-                    data_ini_str = item.get("data_inicio_producao", "")
-                    data_ent_str = item.get("data_entrega", "")
-                    status_atual = item.get("status", "Pendente")
-                    prioridade_atual = item.get("prioridade", "Não")
-                    
-                    pertence_ao_mes_do_filtro = (chave_mes_ano_filtro in data_cad_str)
-                    ativo_para_rolagem = (status_atual in ["Pendente", "Em produção", "Em production"])
-                    
-                    if pertence_ao_mes_do_filtro or ativo_para_rolagem:
-                        try: data_chegada_dt = datetime.strptime(data_cad_str, "%d/%m/%Y").date()
-                        except: data_chegada_dt = data_hoje_dt
-                        
-                        try: data_entrega_dt = datetime.strptime(data_ent_str, "%d/%m/%Y").date()
-                        except: data_entrega_dt = None
-                        
-                        if status_atual == "Pendente":
-                            dias_pendencia = (data_hoje_dt - data_chegada_dt).days; dias_producao = 0
-                        elif status_atual in ["Em production", "Em produção"]:
-                            try: data_inicio_dt = datetime.strptime(data_ini_str, "%d/%m/%Y").date()
-                            except: data_inicio_dt = data_hoje_dt
-                            dias_pendencia = (data_inicio_dt - data_chegada_dt).days
-                            dias_producao = (data_hoje_dt - data_inicio_dt).days
-                        else:
-                            dias_pendencia = 0; dias_producao = 0
-                            
-                        if dias_pendencia < 0: dias_pendencia = 0
-                        if dias_producao < 0: dias_producao = 0
-                        
-                        if status_atual == "Concluído":
-                            sinalizacao_final = "🔵"
-                        else:
-                            if data_entrega_dt and data_hoje_dt > data_entrega_dt: bolinha_status = "🔴"
-                            elif status_atual == "Pendente": bolinha_status = "🟠"
-                            else: bolinha_status = "🟢"
-                                
-                            if prioridade_atual == "Sim": sinalizacao_final = f"{bolinha_status} {bolinha_status}"
-                            else: sinalizacao_final = bolinha_status
-                        
-                        linhas_tabela_ap.append({
-                            "🚨 Alerta": sinalizacao_final,
-                            "Nome do fornecedor / Marca": item.get("fornecedor", ""),
-                            "Número da O.F (Ordem de Fabricação)": item.get("of", ""),
-                            "Referência do Modelo (Peça)": item.get("referencia", ""),
-                            "Quantidade Total de Peças na Nota": item.get("qtd_prevista", 0),
-                            "Dias em pendência": int(dias_pendencia), "Dias em produção": int(dias_producao),
-                            "Data chegada": data_cad_str, "Data para entrega": data_ent_str,
-                            "Preço Unitário": item.get("preco", 0.0), 
-                            "Status": status_atual,
-                            # AS DUAS NOVAS COLUNAS INTEGRADAS NO SEU PAINEL CHEFE:
-                            "Porcentagem já produzido": f"{item.get('porcentagem_pronta', 0)}%",
-                            "✅ Peças Prontas Reais": int(item.get("qtd_pronta", 0)),
-                            "prioridade": item.get("prioridade", "Não")
-                        })
-                        
-            # Desenha a planilha do Administrador 100% TRAVADA para auditoria segura
-            if linhas_tabela_ap:
-                st.data_editor(
-                    linhas_tabela_ap,
-                    column_config={
-                        "🚨 Alerta": st.column_config.TextColumn("🚨 Alerta", disabled=True),
-                        "Nome do fornecedor / Marca": st.column_config.TextColumn("Nome do fornecedor / Marca", disabled=True),
-                        "Número da O.F (Ordem de Fabricação)": st.column_config.TextColumn("Número da O.F (Ordem de Fabricação)", disabled=True),
-                        "Referência do Modelo (Peça)": st.column_config.TextColumn("Referência do Modelo (Peça)", disabled=True),
-                        "Quantidade Total de Peças na Nota": st.column_config.NumberColumn("Quantidade Total de Peças na Nota", disabled=True),
-                        "Dias em pendência": st.column_config.NumberColumn("Dias em pendência", disabled=True),
-                        "Dias em produção": st.column_config.NumberColumn("Dias em produção", disabled=True),
-                        "Data chegada": st.column_config.TextColumn("Data chegada", disabled=True),
-                        "Data para entrega": st.column_config.TextColumn("Data para entrega", disabled=True),
-                        "Preço Unitário": st.column_config.NumberColumn("Preço Unitário", format="R$ %.2f", disabled=True),
-                        "Status": st.column_config.TextColumn("Status", disabled=True),
-                        # AS DUAS COLUNAS EXIBIDAS LADO A LADO EM MODO AUDITORIA NO SEU ESCRITÓRIO:
-                        "Porcentagem já produzido": st.column_config.TextColumn("Porcentagem já produzido", disabled=True),
-                        "✅ Peças Prontas Reais": st.column_config.NumberColumn("✅ Peças Prontas Reais", format="%d", disabled=True),
-                        "prioridade": st.column_config.TextColumn("prioridade", disabled=True)
-                    },
-                    hide_index=True, use_container_width=True, key=f"tab_ap_admin_auditoria_faturamento_v27_{mes_prod_sel}_{ano_prod_sel}"
-                )
-            else: 
-                st.info("💡 Nenhum lote em andamento ou ativo encontrado para o filtro selecionado.")
-        else: 
-            st.info("💡 Nenhum lote de produção cadastrado no sistema no momento.")
-
-    
-                
-                                   
-    # --- LÓGICA DA ÁREA 2: CONFERENTE / FINANCEIRO ---
-elif st.session_state.perfil_atual == "conferente":
-    import pandas as pd
-    
-    if "pagina_conf_atual" not in st.session_state or st.session_state.pagina_conf_atual in ["🔍 Extrato Individual", "📅 Presença Diária"]:
-        st.session_state.pagina_conf_atual = "💰 Financeiro Geral"
-        
-    with st.sidebar:
-        st.markdown("---")
-        st.markdown("### 🗂️ Menu do Conferente")
-        
-        paginas_conf = {
-            "💰 Financeiro Geral": "💰 Financeiro Geral",   
-            "📅 Extrato do Mês": "📅 Extrato do Mês",       
-            "📈 Progresso de Lotes": "📈 Progresso de Lotes",
-            "📥 Importar Ponto": "📥 Importar Ponto"
-        }
-        
-        for label, pagina_id in paginas_conf.items():
-            if st.session_state.pagina_conf_atual == pagina_id:
-                st.markdown(f"""
-                    <div style='background-color: #FFFFFF; color: #000000; padding: 10px 15px; border-radius: 6px; font-weight: bold; text-align: center; border: 2px solid #4A154B; margin-bottom: 8px;'>
-                        {label}
-                    </div>
-                """, unsafe_allow_html=True)
-            else:
-                if st.button(label, use_container_width=True, key=f"btn_conf_sinc_real_{pagina_id}"):
-                    st.session_state.pagina_conf_atual = pagina_id
-                    st.rerun()
-
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        st.markdown("---")
-        if st.button("🚪 Sair do Sistema", use_container_width=True, type="secondary", key="btn_sair_conf_sinc_real"):
-            st.session_state.logado = False
-            st.session_state.perfil_atual = None
-            st.rerun()
-
-    # --- SUB-PÁGINA 1: FINANCEIRO GERAL COMPARTILHADO (ATUALIZADO E SEGURO) ---
-    if st.session_state.pagina_conf_atual == "💰 Financeiro Geral":
-        st.subheader("💰 Fluxo de Caixa Dinâmico — Entradas e Saídas")
-        
-        tipo_mov = st.selectbox(
-            "Tipo de Movimentação", 
-            ["Saída", "Entrada", "Saída (Vale de Funcionário)"], 
-            key="conf_tipo_mov_sinc_real_v33"
-        )
-        
-        # Inicializa as variáveis de controle de fluxo e reset específicas da Conferência
-        if "versao_form_caixa_conf" not in st.session_state:
-            st.session_state.versao_form_caixa_conf = 0
-        if "clicou_registrar_fc_conf" not in st.session_state:
-            st.session_state.clicou_registrar_fc_conf = False
-            
-        chave_reset_fc = st.session_state.versao_form_caixa_conf
-
-        # --- CAMPOS DINÂMICOS LIVRES DE ALTA PERFORMANCE ---
-        if tipo_mov == "Saída (Vale de Funcionário)":
-            todos_funcs = [f["nome"] for f in st.session_state.get("funcionarios", [])]
-            if not todos_funcs:
-                st.warning("⚠️ Cadastre primeiro um funcionário na aba 'Cadastrar Funcionário'.")
-                func_vale = "Nenhum cadastrado"
-            else:
-                func_vale = st.selectbox("Selecione o Funcionário que pediu o Vale", todos_funcs, key=f"fc_func_conf_{chave_reset_fc}")
-            
-            valor_mov = st.number_input("Valor do Vale (R$)", min_value=0.0, format="%.2f", step=10.0, key=f"fc_val_vale_conf_{chave_reset_fc}")
-            parcelas = st.selectbox("Parcelar em quantas vezes? (Limite de 3x para Vales)", [1, 2, 3], index=0, key=f"fc_parc_vale_conf_{chave_reset_fc}")
-            descricao_mov = f"Vale para {func_vale}"
-        else:
-            func_vale = None
-            descricao_mov = st.text_input("Descrição / Motivo da Movimentação (Linha, Luz, Combustível, etc.)", key=f"fc_desc_geral_conf_{chave_reset_fc}")
-            valor_mov = st.number_input("Valor Total (R$)", min_value=0.0, format="%.2f", step=50.0, key=f"fc_val_geral_conf_{chave_reset_fc}")
-            
-            lista_opcoes_parcelas = list(range(1, 13))
-            parcelas = st.selectbox("Quantidade de parcelas (Se houver)", options=lista_opcoes_parcelas, index=0, key=f"fc_parc_geral_conf_{chave_reset_fc}")
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # --- BOTÃO CLÁSSICO DE DISPARO INICIAL (FIXO NO LOCAL QUE VOCÊ CIRCULOU) ---
-        if not st.session_state.clicou_registrar_fc_conf:
-            if st.button("💾 Registrar no Caixa", use_container_width=True, key=f"btn_disparo_conf_fc_{chave_reset_fc}"):
-                if valor_mov <= 0:
-                    st.error("❌ Por favor, digite um valor maior que R$ 0,00.")
-                elif tipo_mov != "Saída (Vale de Funcionário)" and not descricao_mov.strip():
-                    st.error("❌ Por favor, preencha a descrição do motivo desta movimentação.")
-                else:
-                    st.session_state.clicou_registrar_fc_conf = True
-                    st.rerun()
-
-        # --- CONTROLADOR DO AVISO AMARELO DE CONFIRMAÇÃO ---
-        if st.session_state.clicou_registrar_fc_conf:
-            st.warning(f"⚠️ **Aviso de Alteração de Caixa:** Tem certeza que deseja salvar o lançamento de **R$ {valor_mov:.2f}** como **{tipo_mov}**?")
-            
-            col_salvar_fc, col_cancelar_fc = st.columns(2)
-            
-            with col_salvar_fc:
-                if st.button("✅ Sim, confirmar e salvar", use_container_width=True, type="primary", key="btn_conf_caixa_conf_v33"):
-                    data_hoje = datetime.now().strftime("%d/%m/%Y")
-                    
-                    if "movimentacoes_caixa" not in st.session_state:
-                        st.session_state.movimentacoes_caixa = []
-                        
-                    # Grava na gaveta de movimentações
-                    st.session_state.movimentacoes_caixa.append({
-                        "Data": data_hoje, 
-                        "Tipo": "Saída" if "Saída" in tipo_mov else "Entrada", 
-                        "Detalhe / Categoria": "Vale de Funcionário" if "Vale" in tipo_mov else "Geral", 
-                        "Descrição": descricao_mov, 
-                        "Valor Total": valor_mov, 
-                        "Parcelas": parcelas
-                    })
-                    
-                    # Se for vale, joga na gaveta de adiantamentos
-                    if tipo_mov == "Saída (Vale de Funcionário)":
-                        tipo_registro = f"Adiantamento Parcelado de {parcelas}x" if parcelas > 1 else "Adiantamento Parcelado de 1x"
-                        if "adiantamentos" not in st.session_state:
-                            st.session_state.adiantamentos = []
-                        st.session_state.adiantamentos.append({
-                            "nome": func_vale, 
-                            "valor_bruto": valor_mov, 
-                            "valor_parcela": valor_mov / parcelas, 
-                            "tipo": tipo_registro, 
-                            "data": data_hoje, 
-                            "status_vale": "Ativo"
-                        })
-                        
-                    # ORDEM DO ROBÔ: Salva direto no arquivo físico .db do HD na mesma hora
-                    super_robo_trancar_memoria_para_hd()
-                    
-                    # Reseta o formulário limpando os campos
-                    st.session_state.clicou_registrar_fc_conf = False
-                    st.session_state.versao_form_caixa_conf += 1
-                    
-                    st.success(f"🎉 Sucesso! {tipo_mov} de R$ {valor_mov:.2f} gravado com segurança absoluta no HD!")
-                    st.rerun()
-                    
-            with col_cancelar_fc:
-                if st.button("❌ Não, cancelar", use_container_width=True, key="btn_cancela_caixa_conf_v33"):
-                    st.session_state.clicou_registrar_fc_conf = False
-                    st.rerun()
-                    # SUB-PÁGINA 2 COMPARTILHADA: EXTRATO DO MÊS (FILTROS E BOTÕES)
-    elif st.session_state.pagina_conf_atual == "📅 Extrato do Mês":
-        st.subheader("📅 Livro Caixa — Extrato de Todas as Movimentações")
-        
-        # SINCRONIZAÇÃO DE DIRETRIZ: Filtros usando exatamente as mesmas chaves do Admin
-        col_mes, col_ano, col_vazia = st.columns(3)
-        with col_mes:
-            mes_sel = st.selectbox("Selecionar Mês:", ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"], index=8, key="conf_selectbox_mes_global")
-        with col_ano:
-            ano_sel = st.selectbox("Selecionar Ano:", ["2026", "2027", "2028", "2029", "2030"], index=0, key="conf_selectbox_ano_global")
-            
-        st.write(f"Exibindo movimentações cronológicas referentes a: **{mes_sel} de {ano_sel}**")
-        
-        if "tipo_extrato_ativo" not in st.session_state:
-            st.session_state.tipo_extrato_ativo = "E.G"
-
-        # Seção dos três botões alinhados com CSS idêntico ao Admin
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_btn1, col_btn2, col_btn3, col_espaco = st.columns(4)
-        
-        with col_btn1:
-            if st.session_state.tipo_extrato_ativo == "E.G":
-                st.markdown("<style>button[key='conf_btn_ext_geral'] { background-color: #FFFFFF !important; color: #000000 !important; font-weight: bold !important; border: 2px solid #4A154B !important; }</style>", unsafe_allow_html=True)
-            if st.button("📊 Extrato Geral (E.G)", use_container_width=True, key="conf_btn_ext_geral"):
-                st.session_state.tipo_extrato_ativo = "E.G"
-                st.rerun()
-                
-        with col_btn2:
-            if st.session_state.tipo_extrato_ativo == "E.V":
-                st.markdown("<style>button[key='conf_btn_ext_vale'] { background-color: #FFFFFF !important; color: #000000 !important; font-weight: bold !important; border: 2px solid #4A154B !important; }</style>", unsafe_allow_html=True)
-            if st.button("💸 Extrato de Vale (E.V)", use_container_width=True, key="conf_btn_ext_vale"):
-                st.session_state.tipo_extrato_ativo = "E.V"
-                st.rerun()
-
-        with col_btn3:
-            if st.session_state.tipo_extrato_ativo == "F.P":
-                st.markdown("<style>button[key='conf_btn_folha_pag'] { background-color: #FFFFFF !important; color: #000000 !important; font-weight: bold !important; border: 2px solid #4A154B !important; }</style>", unsafe_allow_html=True)
-            if st.button("📝 Folha de Pag. (F.P)", use_container_width=True, key="conf_btn_folha_pag"):
-                st.session_state.tipo_extrato_ativo = "F.P"
-                st.rerun()
-
-        st.markdown("---")
-        meses_num = {"Janeiro":"01", "Fevereiro":"02", "Março":"03", "Abril":"04", "Maio":"05", "Junho":"06", "Julho":"07", "Agosto":"08", "Setembro":"09", "Outubro":"10", "Novembro":"11", "Dezembro":"12"}
-        mes_procurado = meses_num[mes_sel]
-        # --- TELA DO EXTRATO GERAL (E.G) ---
-        if st.session_state.tipo_extrato_ativo == "E.G":
-            st.markdown(f"#### 📂 Visualizando: Extrato Geral ({mes_sel}/{ano_sel})")
-            if "movimentacoes_caixa" in st.session_state and st.session_state.movimentacoes_caixa:
-                linhas_tabela_eg = []
-                saldo_acumulado = 0.0
-                for mov in st.session_state.movimentacoes_caixa:
-                    data_mov = mov.get("Data", "")
-                    if f"/{mes_procurado}/{ano_sel}" in data_mov or data_mov == "":
-                        v_total = mov.get("Valor Total", 0.0)
-                        tipo_m = mov.get("Tipo", "Saída")
-                        valor_final = -v_total if tipo_m == "Saída" else v_total
-                        saldo_acumulado += valor_final
-                        linhas_tabela_eg.append({"Data": data_mov, "Descrição": mov.get("Descrição", ""), "Valor": valor_final})
-                
-                if linhas_tabela_eg:
-                    linhas_tabela_eg.append({"Data": "", "Descrição": "📊 SALDO TOTAL DO CAIXA", "Valor": saldo_acumulado})
-                    st.dataframe(linhas_tabela_eg, column_config={"Data": st.column_config.TextColumn("Data", width="small"), "Descrição": st.column_config.TextColumn("Descrição"), "Valor": st.column_config.NumberColumn("Valor", format="R$ %.2f")}, hide_index=True, use_container_width=True)
-                    if saldo_acumulado < 0:
-                        st.error(f"🔴 Caixa Negativo: Saldo em **R$ {saldo_acumulado:,.2f}**".replace(",", "X").replace(".", ",").replace("X", "."))
-                    else:
-                        st.success(f"🟢 Caixa Positivo: Saldo em **R$ {saldo_acumulado:,.2f}**".replace(",", "X").replace(".", ",").replace("X", "."))
-                else:
-                    st.info(f"💡 Nenhuma movimentação em {mes_sel}/{ano_sel}.")
-            else:
-                st.info("💡 Nenhuma movimentação geral registrada.")
-
-        # --- TELA DO EXTRATO DE VALE (E.V) ---
-        elif st.session_state.tipo_extrato_ativo == "E.V":
-            # --- CAPTURA DE DATA INTELIGENTE E UNIFICADA PARA A CONFERÊNCIA ---
-            v_mes_tela = mes_sel if 'mes_sel' in locals() else st.session_state.get("filtro_mes_esteira_ap_admin_v25", st.session_state.get("dash_ref_mes_v30", "Setembro"))
-            v_ano_tela = ano_sel if 'ano_sel' in locals() else st.session_state.get("filtro_ano_esteira_ap_admin_v25", st.session_state.get("dash_ref_ano_v30", "2026"))
-            
-            st.markdown(f"#### 📂 Visualizando: Controle Individual de Vales e Histórico ({v_mes_tela}/{v_ano_tela})")
-            
-            todos_funcs = [f["nome"] for f in st.session_state.funcionarios] if "funcionarios" in st.session_state else []
-            
-            if not todos_funcs:
-                st.warning("⚠️ Cadastre funcionários no sistema para liberar laudos de históricos.")
-            else:
-                # Modificado a key para o Conferente ter seu próprio seletor sem travar o do Admin
-                func_selecionado = st.selectbox("Pesquisar Funcionário:", ["Escolha um funcionário..."] + todos_funcs, key="busca_hist_vales_conferente_v33")
-                
-                if func_selecionado != "Escolha um funcionário...":
-                    linhas_tabela_ev = []
-                    desconto_do_mes_selecionado = 0.0
-                    
-                    m_f_c = meses_num.get(v_mes_tela, "09")
-                    mes_tela_num = int(m_f_c)
-                    ano_tela_num = int(v_ano_tela)
-                    chave_tela_atual = f"{mes_tela_num:02d}/{ano_tela_num}"
-
-                    # 1. VARREDURA 1: Coleta vales registrados na tabela de Adiantamentos (E.V)
-                    if "adiantamentos" in st.session_state:
-                        for index, ad in enumerate(st.session_state.adiantamentos):
-                            if str(ad.get("nome")).strip().lower() == str(func_selecionado).strip().lower() and ad.get("status_vale", "Ativo") != "Cancelado":
-                                data_ad = ad.get("data", "")
-                                v_bruto = float(ad.get("valor_bruto", 0.0))
-                                v_parcela = float(ad.get("valor_parcela", v_bruto))
-                                
-                                try: dt_v = datetime.strptime(data_ad, "%d/%m/%Y"); m_orig = dt_v.month; a_orig = dt_v.year
-                                except: m_orig = mes_tela_num; a_orig = ano_tela_num
-                                
-                                texto_t = ad.get("tipo", "1x")
-                                q_parc = 1
-                                for x in range(1, 4):
-                                    if f"{x}x" in texto_t: q_parc = x; break
-                                    
-                                m_cobrancas = []
-                                m_corrido = m_orig; a_corrido = a_orig
-                                for _ in range(q_parc):
-                                    m_cobrancas.append(f"{m_corrido:02d}/{a_corrido}")
-                                    m_corrido += 1
-                                    if m_corrido > 12: m_corrido = 1; a_corrido += 1
-                                    
-                                if chave_tela_atual in m_cobrancas:
-                                    num_parcela_atual = m_cobrancas.index(chave_tela_atual) + 1
-                                    desconto_do_mes_selecionado += v_parcela
-                                    linhas_tabela_ev.append({
-                                        "Data Lançamento": data_ad,
-                                        "Origem / Descrição": f"Vale Parcelado ({num_parcela_atual}/{q_parc})",
-                                        "Valor Total Emprestado": v_bruto,
-                                        "Valor Parcela deste Mês": v_parcela,
-                                        "Status": f"Ativo ({num_parcela_atual}/{q_parc})"
-                                    })
-
-                    # 2. VARREDURA 2: Coleta vales registrados no Fluxo de Caixa Dinâmico (Financeiro Geral)
-                    if "movimentacoes_caixa" in st.session_state and st.session_state.movimentacoes_caixa:
-                        for index, mov in enumerate(st.session_state.movimentacoes_caixa):
-                            data_mov = mov.get("Data", "")
-                            descricao_mov = str(mov.get("Descrição", "")).strip().lower()
-                            
-                            if ("vale" in descricao_mov or "adiantamento" in descricao_mov) and (str(func_selecionado).lower() in descricao_mov):
-                                try: dt_m = datetime.strptime(data_mov, "%d/%m/%Y"); m_orig = dt_m.month; a_orig = dt_m.year
-                                except: m_orig = mes_tela_num; a_orig = ano_tela_num
-                                
-                                try: q_parc_caixa = int(mov.get("Parcelas", mov.get("Quantidade de parcelas", 1)))
-                                except: q_parc_caixa = 1
-                                
-                                v_bruto_caixa = float(mov.get("Valor Total", 0.0))
-                                v_parcela_caixa = v_bruto_caixa / q_parc_caixa
-                                
-                                m_cobrancas_caixa = []
-                                m_corrido = m_orig; a_corrido = a_orig
-                                for _ in range(q_parc_caixa):
-                                    m_cobrancas_caixa.append(f"{m_corrido:02d}/{a_corrido}")
-                                    m_corrido += 1
-                                    if m_corrido > 12: m_corrido = 1; a_corrido += 1
-                                    
-                                if chave_tela_atual in m_cobrancas_caixa:
-                                    num_parcela_atual = m_cobrancas_caixa.index(chave_tela_atual) + 1
-                                    desconto_do_mes_selecionado += v_parcela_caixa
-                                    linhas_tabela_ev.append({
-                                        "Data Lançamento": data_mov,
-                                        "Origem / Descrição": f"Fluxo de Caixa — Vale ({num_parcela_atual}/{q_parc_caixa})",
-                                        "Valor Total Emprestado": v_bruto_caixa,
-                                        "Valor Parcela deste Mês": v_parcela_caixa,
-                                        "Status": f"Ativo ({num_parcela_atual}/{q_parc_caixa})"
-                                    })
-                    
-                    # --- DESENHO DA TELA ATUALIZADA NA CONFERÊNCIA ---
-                    st.markdown(f"### 📋 Histórico de Vales: **{func_selecionado}**")
-                    
-                    desc_mes_br = f"{desconto_do_mes_selecionado:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                    st.markdown(f"<div style='background-color: #B71C1C; padding: 12px; border-radius: 6px; color: white; text-align: center; max-width: 400px; margin-bottom: 20px;'><b>Desconto Ativo em {v_mes_tela}/{v_ano_tela}</b><br><h3>R$ {desc_mes_br}</h3></div>", unsafe_allow_html=True)
-                    
-                    if linhas_tabela_ev:
-                        # DESENHO DA PLANILHA ORIGINAL COM A COLUNA DE EXCLUSÃO ATIVADA
-                        ev_editado_conf = st.data_editor(
-                            linhas_tabela_ev,
-                            column_config={
-                                "ID_Original": None, # Mantém o ID oculto em silêncio
-                                "Data Lançamento": st.column_config.TextColumn("📅 Data Lançamento", disabled=True),
-                                "Origem / Descrição": st.column_config.TextColumn("📝 Origem / Descrição", disabled=True),
-                                "Valor Total Emprestado": st.column_config.NumberColumn("💰 Total Emprestado", format="R$ %.2f", disabled=True),
-                                "Valor Parcela deste Mês": st.column_config.NumberColumn("📉 Parcela do Mês", format="R$ %.2f", disabled=True),
-                                "Status": st.column_config.TextColumn("📌 Status", disabled=True),
-                                "Dar Baixa / Excluir": st.column_config.CheckboxColumn("🗑️ Dar Baixa / Excluir") # INJETA A COLUNA QUE FALTAVA!
-                            },
-                            hide_index=True, use_container_width=True, key=f"tab_ev_individual_conf_v36_{func_selecionado}"
-                        )
-                        
-                        # VERIFICAÇÃO DE EXCLUSÃO BLINDADA
-                        algum_vale_marcado_conf = any(linha.get("Dar Baixa / Excluir", False) for linha in ev_editado_conf)
-                        
-                        if algum_vale_marcado_conf:
-                            st.markdown("<br>", unsafe_allow_html=True)
-                            st.warning(f"⚠️ **Confirmação de Baixa:** Deseja remover permanentemente o(s) vale(s) selecionado(s) de {func_selecionado}?")
-                            
-                            if st.button("🗑️ Confirmar Remoção do Vale Selecionado", use_container_width=True, type="primary", key="btn_remover_vale_caixa_conf_v36"):
-                                novas_movimentacoes = []
-                                for idx_cx, mov_cx in enumerate(st.session_state.movimentacoes_caixa):
-                                    foi_deletado = False
-                                    for linha_tela in ev_editado_conf:
-                                        if linha_tela.get("Dar Baixa / Excluir") and linha_tela.get("ID_Original") == f"CX_{idx_cx}":
-                                            foi_deletado = True
-                                            break
-                                    if not foi_deletado:
-                                        novas_movimentacoes.append(mov_cx)
-                                
-                                st.session_state.movimentacoes_caixa = novas_movimentacoes
-                                st.success("🎉 Sucesso! O vale foi removido dos lançamentos e a folha recalculada!")
-                                st.rerun()
-                    else:
-                        st.info(f"💡 Nenhum vale ativo ou cobrança de parcela para {func_selecionado}.")
-                        # --- TELA DA FOLHA DE PAGAMENTO (F.P) ---
-        elif st.session_state.tipo_extrato_ativo == "F.P":
-            st.markdown(f"#### 📂 Visualizando: Folha de Pagamento Completa")
-            if "funcionarios" in st.session_state:
-                if "status_folha_pagamento" not in st.session_state:
-                    st.session_state.status_folha_pagamento = {}
-                
-                # Certifica que a gaveta do ponto existe para não dar erro de leitura
-                if "presencas_ponto" not in st.session_state:
-                    st.session_state.presencas_ponto = {}
-                
-                linhas_fp = []
-                for f in st.session_state.funcionarios:
-                    nome_f = f["nome"]
-                    nome_f_chave = nome_f.strip().title() # Alinha com o padrão de leitura do relógio
-                    tipo_pag = f.get("pagamento", "Fixo")
-                    valor_base = float(f.get("valor_hora", 0.0))
-                    chave_pix_f = f.get("chave_pix", "Não cadastrada")
-                    
-                    # --- REQUISITO OPERACIONAL EXIGIDO: CALCULO CRONOLÓGICO DO FA05H ---
-                    if tipo_pag == "Fixo":
-                        # REGRA 1: Pagamento fixo entra com o salário bruto cadastrado
-                        bruto_colaborador = valor_base
-                    elif tipo_pag == "Por operação":
-                        # REGRA 2: Pagamento por operação (peça) fica zerado na folha interna
-                        bruto_colaborador = 0.0
-                    elif tipo_pag == "Por hora":
-                        horas_relogio = 0.0
-                        
-                        # Captura as variáveis de data de forma dinâmica
-                        v_mes_tela = mes_sel if 'mes_sel' in locals() else (mes_prod_sel if 'mes_prod_sel' in locals() else "Setembro")
-                        v_ano_tela = ano_sel if 'ano_sel' in locals() else (ano_prod_sel if 'ano_prod_sel' in locals() else "2026")
-                        
-                        m_f_c = meses_num.get(v_mes_tela, "09")
-                        chave_periodo_pesquisa = f"{m_f_c}/{v_ano_tela}"
-                        
-                        # BARREIRA DE PROTEÇÃO ÚNICA: Varre o DB comparando em letras minúsculas
-                        if "banco_horas_permanente" in st.session_state:
-                            for reg_h in st.session_state.banco_horas_permanente:
-                                if reg_h.get("mes_ano") == chave_periodo_pesquisa:
-                                    if str(reg_h.get("nome")).strip().lower() == str(nome_f).strip().lower():
-                                        horas_relogio = float(reg_h.get("total_horas", 0.0))
-                                        break
-                                        
-                        bruto_colaborador = horas_relogio * valor_base
-                    
-                    
-                    # Motor de parcelas de vales integrado para dedução precisa no mês
-                    total_descontos_mes = 0.0
-                    
-                    # 1. Busca vales oficiais registrados na tabela de Adiantamentos (E.V)
-                    if "adiantamentos" in st.session_state:
-                        for ad in st.session_state.adiantamentos:
-                            if str(ad.get("nome")).strip().lower() == str(nome_f).strip().lower() and ad.get("status_vale", "Ativo") != "Cancelado":
-                                try:
-                                    dt_v = datetime.strptime(ad.get("data", ""), "%d/%m/%Y")
-                                    m_origem = dt_v.month; a_origem = dt_v.year
-                                except:
-                                    m_origem = int(meses_num.get(mes_sel, "09")); a_origem = int(ano_sel)
-                                
-                                texto_t = ad.get("tipo", "1x")
-                                q_parc = 1
-                                for x in range(1, 4):
-                                    if f"{x}x" in texto_t: q_parc = x; break
-                                    
-                                m_corrido = m_origem; a_corrido = a_origem; m_cobrancas = []
-                                for _ in range(q_parc):
-                                    m_cobrancas.append(f"{m_corrido:02d}/{a_corrido}")
-                                    m_corrido += 1
-                                    if m_corrido > 12: m_corrido = 1; a_corrido += 1
-                                    
-                                if f"{meses_num.get(mes_sel, '09')}/{ano_sel}" in m_cobrancas:
-                                    total_descontos_mes += ad.get("valor_parcela", 0.0)
-
-                    # 2. PONTE AUTOMÁTICA EXIGIDA: Varre o Extrato Geral procurando menções textuais de vales lançados
-                    if "movimentacoes_caixa" in st.session_state and st.session_state.movimentacoes_caixa:
-                        m_f_c = meses_num.get(mes_sel, "09")
-                        mes_tela_num = int(m_f_c)
-                        ano_tela_num = int(ano_sel)
-                        
-                        for mov in st.session_state.movimentacoes_caixa:
-                            data_mov = mov.get("Data", "")
-                            descricao_mov = str(mov.get("Descrição", "")).strip().lower()
-                            
-                            # Verifica se o lançamento é um vale ou adiantamento para esta funcionária específica
-                            if ("vale" in descricao_mov or "adiantamento" in descricao_mov) and (str(nome_f).lower() in descricao_mov):
-                                try:
-                                    dt_mov = datetime.strptime(data_mov, "%d/%m/%Y")
-                                    mes_origem = dt_mov.month
-                                    ano_origem = dt_mov.year
-                                except:
-                                    mes_origem = mes_tela_num; ano_origem = ano_tela_num
-                                
-                                # Captura quantas parcelas foram registradas no formulário (ex: 1, 2, 3)
-                                try: q_parc_caixa = int(mov.get("Parcelas", mov.get("Quantidade de parcelas", 1)))
-                                except: q_parc_caixa = 1
-                                
-                                v_bruto_caixa = float(mov.get("Valor Total", 0.0))
-                                v_parcela_caixa = v_bruto_caixa / q_parc_caixa
-                                
-                                # MOTOR CRONOLÓGICO: Gera os meses em que esse vale do Financeiro Geral deve cobrar
-                                m_cobrancas_caixa = []
-                                m_corrido = mes_origem; a_corrido = ano_origem
-                                for _ in range(q_parc_caixa):
-                                    m_cobrancas_caixa.append(f"{m_corrido:02d}/{a_corrido}")
-                                    m_corrido += 1
-                                    if m_corrido > 12: m_corrido = 1; a_corrido += 1
-                                
-                                # Se o mês que o chefe está olhando na tela for um dos meses de cobrança da parcela
-                                chave_mes_atual_tela = f"{mes_tela_num:02d}/{ano_tela_num}"
-                                if chave_mes_atual_tela in m_cobrancas_caixa:
-                                    # Desconta apenas o valor da parcela fracionada!
-                                    total_descontos_mes += v_parcela_caixa
-                    
-                    liquido_a_receber = max(0.0, bruto_colaborador - total_descontos_mes)
-                    
-                    texto_desconto = f"-R$ {total_descontos_mes:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if total_descontos_mes > 0 else ""
-                    chave_status = f"{nome_f}_{mes_sel}_{ano_sel}"
-                    if chave_status not in st.session_state.status_folha_pagamento: 
-                        st.session_state.status_folha_pagamento[chave_status] = "Pendente"
-                    
-                    linhas_fp.append({
-                        "Funcionário": nome_f,
-                        "Chave PIX": chave_pix_f,
-                        "Desconto de Vale": texto_desconto,
-                        "Valor a receber": liquido_a_receber,
-                        "Status": st.session_state.status_folha_pagamento[chave_status]
-                    })
-                
-                # SINCRO REAL: Usa a mesma estrutura de chaves estruturadas e chaves do editor do Admin
-                folha_editada = st.data_editor(
-                    linhas_fp,
-                    column_config={
-                        "Funcionário": st.column_config.TextColumn("Funcionário", disabled=True),
-                        "Chave PIX": st.column_config.TextColumn("🔑 Chave PIX", disabled=True),
-                        "Desconto de Vale": st.column_config.TextColumn("Desconto de Vale", disabled=True),
-                        "Valor a receber": st.column_config.NumberColumn("Valor a receber", format="R$ %.2f", disabled=True),
-                        "Status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Pago"], required=True)
-                    },
-                    hide_index=True, 
-                    use_container_width=True, 
-                    key=f"editor_folha_conf_v18_sinc_{mes_sel}_{ano_sel}"
-                )
-                for item in folha_editada: 
-                    st.session_state.status_folha_pagamento[f"{item['Funcionário']}_{mes_sel}_{ano_sel}"] = item["Status"]
-            else: 
-                st.warning("⚠️ Nenhum funcionário cadastrado no sistema.")
-
-    # 3. CONFERENTE: PROGRESSO DE LOTES GERAIS
-    elif st.session_state.pagina_conf_atual == "📈 Progresso de Lotes":
-        st.subheader("📈 Controle de Qualidade — Andamento e Conclusão de Lotes")
-        
-        # Filtros de Mês e Ano adicionados no topo da Conferente para gerenciar o período
-        col_m_prod_c, col_a_prod_c, col_espaco_prod_c = st.columns(3)
-        with col_m_prod_c:
-            mes_prod_sel = st.selectbox("Filtrar por Mês:", ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"], index=8, key="filtro_mes_esteira_ap_conf_v25")
-        with col_a_prod_c:
-            ano_prod_sel = st.selectbox("Filtrar por Ano:", ["2026", "2027", "2028", "2029", "2030"], index=0, key="filtro_ano_esteira_ap_conf_v25")
-            
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        if "lotes_gerais" in st.session_state and st.session_state.lotes_gerais:
-            # --- MOTOR DE CÁLCULO DOS 4 CARDS PARA A CONFERÊNCIA ---
-            qtd_pendentes = 0
-            qtd_em_producao = 0
-            qtd_vencidos = 0
-            qtd_concluidos = 0
-            data_hoje_dt = datetime.now().date()
-            
-            meses_num = {"Janeiro":"01", "Fevereiro":"02", "Março":"03", "Abril":"04", "Maio":"05", "Junho":"06", "Julho":"07", "Agosto":"08", "Setembro":"09", "Outubro":"10", "Novembro":"11", "Dezembro":"12"}
-            mes_procurado = meses_num[mes_prod_sel]
-            chave_mes_ano_filtro = f"/{mes_procurado}/{ano_prod_sel}"
-            
-            for item in st.session_state.lotes_gerais:
-                data_cad_str = item.get("data_cadastro", datetime.now().strftime("%d/%m/%Y"))
-                data_ent_str = item.get("data_entrega", "")
-                status_atual = item.get("status", "Pendente")
-                
-                # Regra idêntica de rolagem viva para contagem precisa dos cards
-                if (chave_mes_ano_filtro in data_cad_str) or (status_atual in ["Pendente", "Em produção", "Em production"]):
-                    try: data_entrega_dt = datetime.strptime(data_ent_str, "%d/%m/%Y").date()
-                    except: data_entrega_dt = None
-                    
-                    if status_atual == "Pendente":
-                        qtd_pendentes += 1
-                    elif status_atual in ["Em produção", "Em production"]:
-                        qtd_em_producao += 1
-                    elif status_atual == "Concluído":
-                        qtd_concluidos += 1
-                        
-                    if data_entrega_dt and status_atual != "Concluído" and data_hoje_dt > data_entrega_dt:
-                        qtd_vencidos += 1
-
-            # --- DESENHO DOS 4 CARDS COLORIDOS HORIZONTAIS NA CONFERÊNCIA ---
-            card_c1, card_c2, card_c3, card_c4 = st.columns(4)
-            with card_c1:
-                st.markdown(f"<div style='background-color: #EF6C00; padding: 15px; border-radius: 8px; color: white; text-align: center;'><b>Lotes Pendentes</b><br><h2>{qtd_pendentes}</h2></div>", unsafe_allow_html=True)
-            with card_c2:
-                st.markdown(f"<div style='background-color: #2E7D32; padding: 15px; border-radius: 8px; color: white; text-align: center;'><b>Em Produção</b><br><h2>{qtd_em_producao}</h2></div>", unsafe_allow_html=True)
-            with card_c3:
-                st.markdown(f"<div style='background-color: #C62828; padding: 15px; border-radius: 8px; color: white; text-align: center;'><b>Lotes Vencidos</b><br><h2>{qtd_vencidos}</h2></div>", unsafe_allow_html=True)
-            with card_c4:
-                st.markdown(f"<div style='background-color: #1565C0; padding: 15px; border-radius: 8px; color: white; text-align: center;'><b>Concluídos</b><br><h2>{qtd_concluidos}</h2></div>", unsafe_allow_html=True)
-                
-            st.markdown("<br><hr>", unsafe_allow_html=True)
-            st.write("📝 **Controle de Fluxo:** Avalie o progresso da fábrica. Somente a Conferência pode marcar os lotes como **Concluído**!")
-
-            linhas_tabela_ap = []
-            for index, item in enumerate(st.session_state.lotes_gerais):
-                    data_cad_str = item.get("data_cadastro", datetime.now().strftime("%d/%m/%Y"))
-                    data_ini_str = item.get("data_inicio_producao", "")
-                    data_ent_str = item.get("data_entrega", "")
-                    status_atual = item.get("status", "Pendente")
-                    prioridade_atual = item.get("prioridade", "Não")
-                    
-                    pertence_ao_mes_do_filtro = (chave_mes_ano_filtro in data_cad_str)
-                    ativo_para_rolagem = (status_atual in ["Pendente", "Em produção", "Em production"])
-                    
-                    if pertence_ao_mes_do_filtro or ativo_para_rolagem:
-                        try: data_chegada_dt = datetime.strptime(data_cad_str, "%d/%m/%Y").date()
-                        except: data_chegada_dt = data_hoje_dt
-                        
-                        try: data_entrega_dt = datetime.strptime(data_ent_str, "%d/%m/%Y").date()
-                        except: data_entrega_dt = None
-                        
-                        if status_atual == "Pendente":
-                            dias_pendencia = (data_hoje_dt - data_chegada_dt).days; dias_producao = 0
-                        elif status_atual in ["Em production", "Em produção"]:
-                            try: data_inicio_dt = datetime.strptime(data_ini_str, "%d/%m/%Y").date()
-                            except: data_inicio_dt = data_hoje_dt
-                            dias_pendencia = (data_inicio_dt - data_chegada_dt).days
-                            dias_producao = (data_hoje_dt - data_inicio_dt).days
-                        else:
-                            dias_pendencia = 0; dias_producao = 0
-                            
-                        if dias_pendencia < 0: dias_pendencia = 0
-                        if dias_producao < 0: dias_producao = 0
-                        
-                        if status_atual == "Concluído":
-                            sinalizacao_final = "🔵"
-                        else:
-                            if data_entrega_dt and data_hoje_dt > data_entrega_dt: bolinha_status = "🔴"
-                            elif status_atual == "Pendente": bolinha_status = "🟠"
-                            else: bolinha_status = "🟢"
-                                
-                            if prioridade_atual == "Sim": sinalizacao_final = f"{bolinha_status} {bolinha_status}"
-                            else: sinalizacao_final = bolinha_status
-                        
-                        linhas_tabela_ap.append({
-                            "ID_Original": index, "🚨 Alerta": sinalizacao_final,
-                            "Nome do fornecedor / Marca": item.get("fornecedor", ""),
-                            "Número da O.F (Ordem de Fabricação)": item.get("of", ""),
-                            "Referência do Modelo (Peça)": item.get("referencia", ""),
-                            "Quantidade Total de Peças na Nota": item.get("qtd_prevista", 0),
-                            "Dias em pendência": int(dias_pendencia), "Dias em produção": int(dias_producao),
-                            "Data chegada": data_cad_str, "Data para entrega": data_ent_str,
-                            "Preço Unitário": item.get("preco", 0.0), "Status": "Em produção" if status_atual == "Em production" else status_atual,
-                            "Porcentagem já produzido": f"{item.get('porcentagem_pronta', 0)}%", "prioridade": prioridade_atual
-                        })
-                        
-            # O EDITOR FICA FORA DO FOR — PREVENÇÃO DE DUPLICIDADE DE CHAVE
-            if linhas_tabela_ap:
-                if "versao_esteira_ap_conf" not in st.session_state: 
-                    st.session_state.versao_esteira_ap_conf = 0
-                chave_tabela_ap_conf = f"tab_ap_conf_v27_sinc_def_{mes_prod_sel}_{ano_prod_sel}_v{st.session_state.versao_esteira_ap_conf}"
-                
-                # Prepara os dados injetando a quantidade real vinda da gaveta oficial da fábrica
-                for linha_fp in linhas_tabela_ap:
-                    idx = linha_fp["ID_Original"]
-                    linha_fp["✅ Peças Prontas Reais"] = int(st.session_state.lotes_gerais[idx].get("qtd_pronta", 0))
-
-                tabela_ap_editada_conf = st.data_editor(
-                    linhas_tabela_ap,
-                    column_config={
-                        "ID_Original": None,
-                        "🚨 Alerta": st.column_config.TextColumn("🚨 Alerta", disabled=True),
-                        "Nome do fornecedor / Marca": st.column_config.TextColumn("Nome do fornecedor / Marca", disabled=True),
-                        "Número da O.F (Ordem de Fabricação)": st.column_config.TextColumn("Número da O.F (Ordem de Fabricação)", disabled=True),
-                        "Referência do Modelo (Peça)": st.column_config.TextColumn("Referência do Modelo (Peça)", disabled=True),
-                        "Quantidade Total de Peças na Nota": st.column_config.NumberColumn("Quantidade Total de Peças na Nota", disabled=True),
-                        "Dias em pendência": st.column_config.NumberColumn("Dias em pendência", disabled=True),
-                        "Dias em produção": st.column_config.NumberColumn("Dias em produção", disabled=True),
-                        "Data chegada": st.column_config.TextColumn("Data chegada", disabled=True),
-                        "Data para entrega": st.column_config.TextColumn("Data para entrega", disabled=True),
-                        "Preço Unitário": st.column_config.NumberColumn("Preço Unitário", format="R$ %.2f", disabled=True),
-                        "Status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Em produção", "Concluído"], required=True),
-                        # AS DUAS COLUNAS LADO A LADO NA TELA DO CONTROLE DE QUALIDADE:
-                        "Porcentagem já produzido": st.column_config.TextColumn("Porcentagem já produzido", disabled=True),
-                        "✅ Peças Prontas Reais": st.column_config.NumberColumn("✅ Peças Prontas Reais", min_value=0, step=1), # Editável para conferência ajustar se necessário
-                        "prioridade": st.column_config.SelectboxColumn("prioridade", options=["Não", "Sim"], disabled=True)
-                    },
-                    hide_index=True, use_container_width=True, key=chave_tabela_ap_conf
-                )
-                
-                dados_mudaram_ap_conf = False
-                if chave_tabela_ap_conf in st.session_state and st.session_state[chave_tabela_ap_conf]["edited_rows"]:
-                    dados_mudaram_ap_conf = True
-                    
-                if dados_mudaram_ap_conf:
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    st.warning("⚠️ **Aviso de Alteração:** Mudanças de status ou contagem real pendentes na Conferência!")
-                    
-                    col_salvar_ap_c, col_cancelar_ap_c = st.columns(2)
-                    with col_salvar_ap_c:
-                        if st.button("💾 Confirmar e Finalizar Lotes", use_container_width=True, type="primary", key="btn_salvar_conf_v27"):
-                            for linha in tabela_ap_editada_conf:
-                                idx_global = linha["ID_Original"]
-                                status_novo = linha["Status"]
-                                qtd_real_final = int(linha["✅ Peças Prontas Reais"])
-                                
-                                # Salva na memória do sistema as duas informações separadas
-                                st.session_state.lotes_gerais[idx_global]["status"] = status_novo
-                                st.session_state.lotes_gerais[idx_global]["qtd_pronta"] = qtd_real_final
-                                
-                                # Se foi concluído, força a porcentagem para 100% automaticamente
-                                if status_novo == "Concluído":
-                                    st.session_state.lotes_gerais[idx_global]["porcentagem_pronta"] = 100
-                                    
-                            st.success("🎉 Lotes faturados com as quantidades reais e porcentagens sincronizadas!"); st.rerun()
-                            
-                    with col_cancelar_ap_c:
-                        if st.button("❌ Descartar e Voltar", use_container_width=True, key="btn_desc_conf_v27"):
-                            if chave_tabela_ap_conf in st.session_state: del st.session_state[chave_tabela_ap_conf]
-                            st.session_state.versao_esteira_ap_conf += 1; st.rerun()
-                           
-                            # REQUISITO EXIGIDO: NOVA SUB-PÁGINA DE IMPORTAÇÃO DE PONTO NA CONFERÊNCIA
-        # REQUISITO EXIGIDO: NOVA SUB-PÁGINA DE IMPORTAÇÃO DE PONTO NA CONFERÊNCIA
-    elif st.session_state.pagina_conf_atual == "📥 Importar Ponto":
-        st.subheader("📥 Importar Relatório do Relógio de Ponto — FA05H")
-        st.write("Insira o arquivo gerado no Pen Drive pelo aparelho para atualizar as horas trabalhadas acumuladas do mês:")
-        
-        arquivo_ponto = st.file_uploader("Arraste ou selecione o arquivo do Pen Drive (.xlsx ou .xls)", type=["xlsx", "xls"])
-        
-        if arquivo_ponto is not None:
-            try:
-                # [MOTOR DO EXCEL ORIGINAL DA DLR DO EVERTON]
-                import pandas as pd
-                df_ponto = pd.read_excel(arquivo_ponto)
-                banco_horas_calculado = processar_arquivo_ponto_fa05h(df_ponto)
-                
-                if banco_horas_calculado:
-                    linhas_resumo = []
-                    for nome_f_limpo, total_h in banco_horas_calculado.items():
-                        db_salvar_ponto_horas(nome_f_limpo, f"{meses_num.get(st.session_state.get('dash_ref_mes_v30', 'Setembro'), '09')}/{st.session_state.get('dash_ref_ano_v30', '2026')}", total_h)
-                        linhas_resumo.append({
-                            "Funcionário": nome_f_limpo,
-                            "Total Horas Relógio": f"{total_h:.2f} hrs"
-                        })
-                    st.dataframe(linhas_resumo, use_container_width=True, hide_index=True)
-                    st.success("🎉 Sucesso! As horas do relógio FA05H foram trancadas de forma permanente no HD da empresa!")
-                else:
-                    st.warning("⚠️ O arquivo foi lido, mas a estrutura de colunas do resumo do FA05H não foi localizada.")
-            except Exception as e:
-                st.error(f"❌ Erro crítico ao processar o arquivo de ponto. Detalhe técnico: {e}")
-
-        # === AJUSTE DE OURO: COLADO NA PAREDE ESQUERDA PARA APARECER O TEMPO TODO ===
-        st.markdown("---")
-        st.subheader("✍️ Ajuste Manual de Horas (Exceções de Falta de Energia)")
-        st.write("Use este formulário para lançar ou corrigir horas de funcionários quando o relógio ponto falhar:")
-        
-        mes_ajuste_sel = st.selectbox("Mês do Ajuste:", ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"], index=8, key="ajuste_ponto_mes_v1")
-        ano_ajuste_sel = st.selectbox("Ano do Ajuste:", ["2026", "2027", "2028", "2029", "2030"], index=0, key="ajuste_ponto_ano_v1")
-        
-        if "funcionarios" in st.session_state and st.session_state.funcionarios:
-            lista_nomes_func = [f["nome"] for f in st.session_state.funcionarios]
-            
-            with st.form(key="form_ajuste_manual_ponto_v1", clear_on_submit=True):
-                col_aj_1, col_aj_2 = st.columns(2)
-                with col_aj_1:
-                    func_selecionado = st.selectbox("Selecione o Funcionário:", lista_nomes_func)
-                with col_aj_2:
-                    horas_para_adicionar = st.number_input("Quantidade de Horas a Acrescentar (Decimais, ex: 8.0 ou 4.5):", min_value=0.0, max_value=220.0, step=0.5, value=0.0)
-                    
-                motivo_ajuste = st.text_input("Motivo do Ajuste (Opcional):", placeholder="Ex: Falta de energia no dia 22/09")
-                btn_salvar_ajuste_ponto = st.form_submit_button("💾 Confirmar e Somar Horas no Banco")
-                
-                if btn_salvar_ajuste_ponto:
-                    m_num = MESES_NUM_GLOBAL.get(mes_ajuste_sel, "09") if "MESES_NUM_GLOBAL" in locals() else "09"
-                    chave_periodo_ajuste = f"{m_num}/{ano_ajuste_sel}"
-                    nome_func_chave = str(func_selecionado).strip().title()
-                    
-                    registro_encontrado = False
-                    if "banco_horas_permanente" in st.session_state:
-                        for reg_h in st.session_state.banco_horas_permanente:
-                            if reg_h.get("mes_ano") == chave_periodo_ajuste and str(reg_h.get("nome")).strip().title() == nome_func_chave:
-                                horas_antigas = float(reg_h.get("total_horas", 0.0))
-                                reg_h["total_horas"] = horas_antigas + float(horas_para_adicionar)
-                                registro_encontrado = True
-                                break
-                    
-                    if not registro_encontrado:
-                        if "banco_horas_permanente" not in st.session_state:
-                            st.session_state.banco_horas_permanente = []
-                        st.session_state.banco_horas_permanente.append({
-                            "nome": nome_func_chave,
-                            "mes_ano": chave_periodo_ajuste,
-                            "total_horas": float(horas_para_adicionar)
-                        })
-                        
-                    # --- A CORREÇÃO DE OURO: GRAVA NOS DOIS MOTORES DE BANCO DE DADOS ---
-                    db_salvar_ponto_horas(nome_func_chave, chave_periodo_ajuste, st.session_state.banco_horas_permanente[-1]["total_horas"] if not registro_encontrado else reg_h["total_horas"])
-                    st.session_state.presencas_ponto[nome_func_chave] = float(st.session_state.banco_horas_permanente[-1]["total_horas"] if not registro_encontrado else reg_h["total_horas"])
-                    super_robo_trancar_memoria_para_hd()
-                    
-                    st.success(f"🎉 Sucesso! Foi acrescentado +{horas_para_adicionar} horas na ficha de {func_selecionado}!")
-                    st.rerun()
-        else:
-            st.warning("⚠️ Cadastre funcionários no sistema primeiro antes de realizar ajustes manuais de ponto.")
-        
-        # --- 🪡 ÁREA 3: MANUAL / PRODUÇÃO — DLR ---
-elif st.session_state.perfil_atual == "manual":
-    
-    # Inicializa a sub-página padrão da produção se não existir
-    if "pagina_man_atual" not in st.session_state:
-        st.session_state.pagina_man_atual = "⏱️ Produção de Hora em Hora"
-        
-    with st.sidebar:
-        st.markdown("---")
-        st.markdown("### 🗂️ Painel da Produção")
-        
-        # REQUISITO EXIGIDO: Adicionado a nova página 📅 P.D no menu lateral
-        paginas_man = {
-            "⏱️ Produção de Hora em Hora": "⏱️ Produção de Hora em Hora",
-            "📦 Entrada de Lotes (Fornecedor)": "📦 Entrada de Lotes (Fornecedor)",
-            "📅 Peças Produzidas por Dia (P.D)": "📅 Peças Produzidas por Dia (P.D)" # <-- NOVO BOTÃO P.D
-        }
-        
-        # REGRA DE IDENTIDADE VISUAL: Página ativa fica BRANCA com letra PRETA
-        for label, pagina_id in paginas_man.items():
-            if st.session_state.pagina_man_atual == pagina_id:
-                st.markdown(f"""
-                    <div style='background-color: #FFFFFF; color: #000000; padding: 10px 15px; border-radius: 6px; font-weight: bold; text-align: center; border: 2px solid #4A154B; margin-bottom: 8px;'>
-                        {label}
-                    </div>
-                """, unsafe_allow_html=True)
-            else:
-                if st.button(label, use_container_width=True, key=f"btn_man_v26_{pagina_id}"):
-                    st.session_state.pagina_man_atual = pagina_id
-                    st.rerun()
-
-        # Botão de Sair isolado no rodapé da produção
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        st.markdown("---")
-        if st.button("🚪 Sair do Sistema", use_container_width=True, type="secondary", key="btn_sair_manual_v26"):
-            st.session_state.logado = False
-            st.session_state.perfil_atual = None
-            st.rerun()
-
-    # --- CARREGAMENTO DAS TELAS DO SETOR MANUAL ---
-    
-    # TELA 1: TABELA DE PRODUÇÃO DIÁRIA DE HORA EM HORA
-    if st.session_state.pagina_man_atual == "⏱️ Produção de Hora em Hora":
-        st.subheader("⏱️ Controle de Eficiência — Produção de Hora em Hora")
-        st.write("Selecione a colaboradora e registre a quantidade de peças prontas entregues no fechamento de cada hora:")
-        
-        # Puxa a lista oficial e viva de funcionários cadastrados no Administrador
-        lista_costureiras = [f["nome"] for f in st.session_state.get("funcionarios", []) if f.get("cargo") == "Costureira"]
-        
-        if not lista_costureiras:
-            st.warning("⚠️ Nenhuma funcionária com o cargo de 'Costureira' foi cadastrada no sistema pelo Administrador.")
-        else:
-            # Filtros horizontais de monitoramento
-            col_h1, col_h2 = st.columns(2)
-            with col_h1:
-                costureira_sel = st.selectbox("👤 Selecionar Costureira:", lista_costureiras, key="prod_hora_costureira_sel_v25")
-            with col_h2:
-                data_registro_prod = st.date_input("📅 Data do Acompanhamento:", value=datetime.now(), key="prod_hora_data_sel_v25")
-                
-            data_prod_txt = data_registro_prod.strftime("%d/%m/%Y")
-            st.markdown("---")
-            
-            # Inicializa a gaveta global de registros horários se não existir
-            if "historico_producao_hora" not in st.session_state:
-                st.session_state.historico_producao_hora = []
-                
-            # Cria a chave única combinando a costureira e o dia para os dados não se misturarem
-            chave_registro_dia = f"{costureira_sel}_{data_prod_txt}"
-            
-            # Busca se já existem dados salvos desse dia para essa costureira, senão cria uma jornada limpa
-            jornada_atual = None
-            for registro in st.session_state.historico_producao_hora:
-                if registro.get("ID_Chave") == chave_registro_dia:
-                    jornada_atual = registro.get("Tabela")
-                    break
-                    
-            if jornada_atual is None:
-                jornada_atual = [
-                    {"Horário": "07:00 às 08:00", "Quantidade Produzida": 0, "Observações / Ocorrências": ""},
-                    {"Horário": "08:00 às 09:00", "Quantidade Produzida": 0, "Observações / Ocorrências": ""},
-                    {"Horário": "09:00 às 10:00", "Quantidade Produzida": 0, "Observações / Ocorrências": ""},
-                    {"Horário": "10:00 às 11:00", "Quantidade Produzida": 0, "Observações / Ocorrências": ""},
-                    {"Horário": "11:00 às 12:00", "Quantidade Produzida": 0, "Observações / Ocorrências": ""},
-                    {"Horário": "13:00 às 14:00", "Quantidade Produzida": 0, "Observações / Ocorrências": ""},
-                    {"Horário": "14:00 às 15:00", "Quantidade Produzida": 0, "Observações / Ocorrências": ""},
-                    {"Horário": "15:00 às 16:00", "Quantidade Produzida": 0, "Observações / Ocorrências": ""},
-                    {"Horário": "16:00 às 17:00", "Quantidade Produzida": 0, "Observações / Ocorrências": ""},
-                ]
-            
-            st.markdown(f"### 📋 Folha Horária: **{costureira_sel}** — Dia {data_prod_txt}")
-            
-            if "versao_editor_hora" not in st.session_state:
-                st.session_state.versao_editor_hora = 0
-                
-            chave_editor_hora = f"editor_hora_{costureira_sel}_{data_prod_txt}_v{st.session_state.versao_editor_hora}"
-            
-            # Desenha a planilha interativa na tela
-            tabela_hora_editada = st.data_editor(
-                jornada_atual,
-                column_config={
-                    "Horário": st.column_config.TextColumn("⏰ Período da Jornada", disabled=True),
-                    "Quantidade Produzida": st.column_config.NumberColumn("🔢 Peças Concluídas", min_value=0, step=1),
-                    "Observações / Ocorrências": st.column_config.TextColumn("💬 Motivo de Paradas / Notas (Falta de elástico, agulha quebrou...)")
-                },
-                hide_index=True,
-                use_container_width=True,
-                key=chave_editor_hora
-            )
-            
-            # 1. Soma total automática do dia para monitorar a meta no topo
-            total_pecas_costureira = sum([int(item.get("Quantidade Produzida", 0)) for item in tabela_hora_editada])
-            st.success(f"📊 **Rendimento do Dia:** {costureira_sel} já produziu **{total_pecas_costureira} peças** na data de hoje!")
-
-            # 2. INTELIGÊNCIA DE CHECAGEM CORRIGIDA: Detecta alteração tanto em linhas editadas quanto células soltas
-            dados_mudaram_hora = False
-            if chave_editor_hora in st.session_state:
-                estado_h = st.session_state[chave_editor_hora]
-                if estado_h["edited_rows"]:
-                    dados_mudaram_hora = True
-
-            if dados_mudaram_hora:
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.warning(f"⚠️ **Aviso de Alteração:** Você modificou os lançamentos de hora em hora de **{costureira_sel}**! Salve para registrar de verdade.")
-                
-                col_salvar_h, col_cancelar_h = st.columns(2)
-                with col_salvar_h:
-                    if st.button("💾 Confirmar e Gravar Production Horária", use_container_width=True, type="primary", key="btn_salvar_hora_v25_fixed"):
-                        # Atualiza ou adiciona o registro na gaveta do histórico geral
-                        encontrou_registro = False
-                        for registro in st.session_state.historico_producao_hora:
-                            if registro.get("ID_Chave") == chave_registro_dia:
-                                registro["Tabela"] = tabela_hora_editada
-                                encontrou_registro = True
-                                break
-                        
-                        if not encontrou_registro:
-                            st.session_state.historico_producao_hora.append({
-                                "ID_Chave": chave_registro_dia,
-                                "Costureira": costureira_sel,
-                                "Data": data_prod_txt,
-                                "Tabela": tabela_hora_editada
-                            })
-                        
-                        # --- SINCRONIZAÇÃO COMPLETA COM O GRÁFICO DO ADMIN ---
-                        if "producao_hora" not in st.session_state:
-                            st.session_state.producao_hora = []
-                            
-                        st.session_state.producao_hora = [r for r in st.session_state.producao_hora if r.get("Costureira") != costureira_sel]
-                        
-                        st.session_state.producao_hora.append({
-                            "Costureira": costureira_sel,
-                            "9H": int(tabela_hora_editada[0].get("Quantidade Produzida", 0)) + int(tabela_hora_editada[1].get("Quantidade Produzida", 0)),
-                            "10H": int(tabela_hora_editada[2].get("Quantidade Produzida", 0)),
-                            "11H": int(tabela_hora_editada[3].get("Quantidade Produzida", 0)),
-                            "12H": int(tabela_hora_editada[4].get("Quantidade Produzida", 0)),
-                            "14H": int(tabela_hora_editada[5].get("Quantidade Produzida", 0)),
-                            "15H": int(tabela_hora_editada[6].get("Quantidade Produzida", 0)),
-                            "16H": int(tabela_hora_editada[7].get("Quantidade Produzida", 0)),
-                            "17H": int(tabela_hora_editada[8].get("Quantidade Produzida", 0))
-                        })
-                        
-                        # Limpa o cache técnico do editor de dados para fechar o aviso amarelo
-                        if chave_editor_hora in st.session_state:
-                            del st.session_state[chave_editor_hora]
-                            
-                        st.success(f"🎉 Lançamentos de {costureira_sel} gravados com sucesso na folha do dia!")
+            if pt_selecionado_excluir != "Selecionar...":
+                id_pt_del = int(pt_selecionado_excluir.split("|")[0].replace("ID: ", "").strip())
+                st.warning("⚠️ **Aviso de Exclusão:** Tem certeza que deseja apagar permanentemente essas horas do histórico?")
+                c_d_p1, c_del_p2 = st.columns(2)
+                with c_d_p1:
+                    if st.button("✅ Sim, apagar horas", use_container_width=True, type="primary", key="btn_conf_del_pt"):
+                        conn = sqlite3.connect("dlr_confecoes_v3.db"); cursor = conn.cursor()
+                        cursor.execute("DELETE FROM registro_ponto_horistas WHERE id = ?", (id_pt_del,))
+                        conn.commit(); conn.close()
+                        if f"lix_ponto_{periodo_ativo_chave}" in st.session_state:
+                            st.session_state.pop(f"lix_ponto_{periodo_ativo_chave}")
+                        st.success("Removido!"); st.rerun()
+                with c_del_p2:
+                    if st.button("❌ Não, manter", use_container_width=True, key="btn_canc_del_pt"):
+                        if f"lix_ponto_{periodo_ativo_chave}" in st.session_state:
+                            st.session_state.pop(f"lix_ponto_{periodo_ativo_chave}")
                         st.rerun()
-                        
-                with col_cancelar_h:
-                    if st.button("❌ Descartar Mudanças", use_container_width=True, key="btn_cancelar_hora_v25_fixed"):
-                        if chave_editor_hora in st.session_state:
-                            del st.session_state[chave_editor_hora]
-                        st.session_state.versao_editor_hora += 1
-                        st.rerun()
-
-# --- MOTOR DO GRÁFICO DE RENDIMENTO MENSAL INDIVIDUAL ---
-            st.markdown("<br><hr>", unsafe_allow_html=True)
-            st.markdown(f"### 📊 Rendimento Mensal Individual: **{costureira_sel}**")
-            st.write(f"Acompanhe o volume de peças concluídas por **{costureira_sel}** dia a dia no mês selecionado:")
-
-            # Cria um dicionário com os 31 dias zerados para iniciar o gráfico limpo
-            dados_dias_costureira = {f"Dia {d:02d}": 0 for d in range(1, 32)}
-
-            # Varre o histórico na memória filtrando APENAS pela costureira selecionada no topo
-            if "historico_producao_hora" in st.session_state:
-                for registro in st.session_state.historico_producao_hora:
-                    # FILTRO DE OURO: Só calcula se o registro pertencer à costureira da tela
-                    if str(registro.get("Costureira")).strip().lower() == str(costureira_sel).strip().lower():
-                        data_reg = registro.get("Data", "") # Formato esperado: "dd/mm/aaaa"
-                        tabela_reg = registro.get("Tabela", [])
-                        
-                        if data_reg and tabela_reg:
-                            try:
-                                # Corta a data para pegar apenas o número do dia (Ex: "23/09/2026" -> 23)
-                                dia_puro = int(data_reg.split("/")[0])
-                                chave_dia = f"Dia {dia_puro:02d}"
-                                
-                                # Acumula as peças produzidas por ela nessa data específica
-                                if chave_dia in dados_dias_costureira:
-                                    total_desse_dia = sum([int(item.get("Quantidade Produzida", 0)) for item in tabela_reg])
-                                    dados_dias_costureira[chave_dia] += total_desse_dia
-                            except:
-                                pass
-
-            # Transforma os dados no DataFrame do Pandas para o Streamlit desenhar
-            import pandas as pd
-            df_grafico_individual = pd.DataFrame(list(dados_dias_costureira.items()), columns=["Dia do Mês", "Peças Concluídas"])
-            df_grafico_individual.set_index("Dia do Mês", inplace=True)
-
-            # Renderiza o gráfico de barras exclusivo da costureira
-            st.bar_chart(df_grafico_individual, use_container_width=True)
-
-    # TELA 2: ENTRADA DE LOTES (CONTROLE DE CARGA DO FORNECEDOR)
-    if st.session_state.pagina_man_atual == "📦 Entrada de Lotes (Fornecedor)":
-        # Inicializa o interruptor de sub-páginas internas da produção
-        if "sub_pagina_lotes" not in st.session_state:
-            st.session_state.sub_pagina_lotes = "C.L"
-            
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_b1, col_b2, col_b_vazia = st.columns(3)
-        
-        with col_b1:
-            tipo_cl = "primary" if st.session_state.sub_pagina_lotes == "C.L" else "secondary"
-            if st.button("📝 Cadastrar Lote (C.L)", use_container_width=True, type=tipo_cl, key="btn_sub_cl_v21"):
-                st.session_state.sub_pagina_lotes = "C.L"
-                st.rerun()
-        with col_b2:
-            tipo_ap = "primary" if st.session_state.sub_pagina_lotes == "A.P" else "secondary"
-            if st.button("📈 Andamento de Produção (A.P)", use_container_width=True, type=tipo_ap, key="btn_sub_ap_v21"):
-                st.session_state.sub_pagina_lotes = "A.P"
-                st.rerun()
-                
-        st.markdown("---")
-
-        # --- SEÇÃO 1: FORMULÁRIO DE CADASTRO (C.L) ---
-        if st.session_state.sub_pagina_lotes == "C.L":
-            st.subheader("📦 Cadastro e Recepção de Novos Lotes de Tecido")
-            st.write("Preencha os dados da nota do fornecedor para dar entrada oficial na matéria-prima:")
-            
-            if "lotes_gerais" not in st.session_state:
-                st.session_state.lotes_gerais = []
-                
-            if "contador_form_producao" not in st.session_state:
-                st.session_state.contador_form_producao = 0
-                
-            with st.form(key=f"form_prod_lotes_v21_{st.session_state.contador_form_producao}", clear_on_submit=False):
-                fornecedor = st.text_input("Nome do Fornecedor / Marca")
-                of_lote = st.text_input("Número da O.F (Ordem de Fabricação)")
-                referencia = st.text_input("Referência do Modelo (Peça)")
-                
-                col_p1, col_p2, col_p3_chegada, col_p3, col_p4 = st.columns(5) # Mudou para 5 colunas
-                with col_p1:
-                    qtd_prevista = st.number_input("Quantidade Total na Nota", min_value=1, step=10, value=1)
-                with col_p2:
-                    preco_peca = st.number_input("Preço Unitário (R$)", min_value=0.0, format="%.2f", step=0.50)
-                with col_p3_chegada:
-                    # NOVO CAMPO: Permite escolher ou alterar a Data de Chegada (Padrão: Hoje)
-                    data_chegada_sel = st.date_input("📅 Data de Chegada", value=datetime.now())
-                with col_p3:
-                    data_entrega = st.date_input("📅 Previsão de Entrega", value=datetime.now())
-                with col_p4:
-                    prioridade = st.selectbox("🔥 Prioridade?", ["Não", "Sim"])
-                    
-                registrar_lote = st.form_submit_button("📦 Registrar Entrada do Lote")
-                
-                if registrar_lote:
-                    if not fornecedor.strip() or not of_lote.strip() or not referencia.strip():
-                        st.error("❌ Todos os campos de texto são obrigatórios!")
-                    elif preco_peca <= 0:
-                        st.error("❌ O preço unitário deve ser maior que R$ 0,00.")
-                    else:
-                        # Converte a data escolhida no calendário para o formato de texto padrão (dia/mês/ano)
-                        data_cadastro_escolhida = data_chegada_sel.strftime("%d/%m/%Y")
-                        data_entrega_txt = data_entrega.strftime("%d/%m/%Y")
-                        
-                        st.session_state.lotes_gerais.append({
-                            "data_cadastro": data_cadastro_escolhida, # Agora grava a data que você escolheu!
-                            "data_inicio_producao": "",
-                            "fornecedor": fornecedor.strip(),
-                            "of": of_lote.strip(),
-                            "referencia": referencia.strip(),
-                            "qtd_prevista": int(qtd_prevista),
-                            "preco": preco_peca,
-                            "data_entrega": data_entrega_txt,
-                            "prioridade": prioridade,
-                            "status": "Pendente",
-                            "porcentagem_pronta": 0
-                        })
-                        
-                        # Tranca de forma vitalícia no banco de dados SQLite do HD
-                        super_robo_trancar_memoria_para_hd()
-                        
-                        st.success(f"🎉 Lote OF {of_lote} registrado com sucesso!")
-                        st.session_state.contador_form_producao += 1
-                        st.rerun()
-                        
-                        # --- SEÇÃO 2: ANDAMENTO DE PRODUÇÃO (A.P) ---
-        elif st.session_state.sub_pagina_lotes == "A.P":
-            st.subheader("📈 Andamento de Produção e Linha do Tempo de Lotes")
-            
-            # Filtros de Mês e Ano adicionados no topo do A.P para gerenciar o período
-            col_m_prod, col_a_prod, col_espaco_prod = st.columns(3)
-            with col_m_prod:
-                mes_prod_sel = st.selectbox("Filtrar por Mês:", ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"], index=8, key="filtro_mes_esteira_ap_manual_v25")
-            with col_a_prod:
-                ano_prod_sel = st.selectbox("Filtrar por Ano:", ["2026", "2027", "2028", "2029", "2030"], index=0, key="filtro_ano_esteira_ap_manual_v25")
-                
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            if "lotes_gerais" in st.session_state and st.session_state.lotes_gerais:
-                # --- MOTOR DE CÁLCULO DOS 4 CARDS PARA O SETOR MANUAL ---
-                qtd_pendentes = 0
-                qtd_em_producao = 0
-                qtd_vencidos = 0
-                qtd_concluidos = 0
-                data_hoje_dt = datetime.now().date()
-                
-                meses_num = {"Janeiro":"01", "Fevereiro":"02", "Março":"03", "Abril":"04", "Maio":"05", "Junho":"06", "Julho":"07", "Agosto":"08", "Setembro":"09", "Outubro":"10", "Novembro":"11", "Dezembro":"12"}
-                mes_procurado = meses_num[mes_prod_sel]
-                chave_mes_ano_filtro = f"/{mes_procurado}/{ano_prod_sel}"
-                
-                for item in st.session_state.lotes_gerais:
-                    data_cad_str = item.get("data_cadastro", datetime.now().strftime("%d/%m/%Y"))
-                    data_ent_str = item.get("data_entrega", "")
-                    status_atual = item.get("status", "Pendente")
-                    
-                    # Filtra de acordo com a regra de rolagem de meses ativos
-                    if (chave_mes_ano_filtro in data_cad_str) or (status_atual in ["Pendente", "Em produção", "Em production"]):
-                        try: data_entrega_dt = datetime.strptime(data_ent_str, "%d/%m/%Y").date()
-                        except: data_entrega_dt = None
-                        
-                        # Contagem por Status
-                        if status_atual == "Pendente":
-                            qtd_pendentes += 1
-                        elif status_atual in ["Em produção", "Em production"]:
-                            qtd_em_producao += 1
-                        elif status_atual == "Concluído":
-                            qtd_concluidos += 1
-                            
-                        # Contagem de Vencidos (Passou do prazo e não foi concluído)
-                        if data_entrega_dt and status_atual != "Concluído" and data_hoje_dt > data_entrega_dt:
-                            qtd_vencidos += 1
-
-                # --- DESENHO DOS 4 CARDS COLORIDOS HORIZONTAIS NO MANUAL ---
-                card_m1, card_m2, card_m3, card_m4 = st.columns(4)
-                with card_m1:
-                    st.markdown(f"<div style='background-color: #EF6C00; padding: 15px; border-radius: 8px; color: white; text-align: center;'><b>Lotes Pendentes</b><br><h2>{qtd_pendentes}</h2></div>", unsafe_allow_html=True)
-                with card_m2:
-                    st.markdown(f"<div style='background-color: #2E7D32; padding: 15px; border-radius: 8px; color: white; text-align: center;'><b>Em Produção</b><br><h2>{qtd_em_producao}</h2></div>", unsafe_allow_html=True)
-                with card_m3:
-                    st.markdown(f"<div style='background-color: #C62828; padding: 15px; border-radius: 8px; color: white; text-align: center;'><b>Lotes Vencidos</b><br><h2>{qtd_vencidos}</h2></div>", unsafe_allow_html=True)
-                with card_m4:
-                    st.markdown(f"<div style='background-color: #1565C0; padding: 15px; border-radius: 8px; color: white; text-align: center;'><b>Concluídos</b><br><h2>{qtd_concluidos}</h2></div>", unsafe_allow_html=True)
-                    
-                st.markdown("<br><hr>", unsafe_allow_html=True)
-                st.write("📝 **Dica do Setor:** Altere entre **Pendente** e **Em produção**. Lotes ativos rolam de mês automaticamente!")
-
-                linhas_tabela_ap = []
-                for index, item in enumerate(st.session_state.lotes_gerais):
-                    data_cad_str = item.get("data_cadastro", datetime.now().strftime("%d/%m/%Y"))
-                    data_ini_str = item.get("data_inicio_producao", "")
-                    data_ent_str = item.get("data_entrega", "")
-                    status_atual = item.get("status", "Pendente")
-                    prioridade_atual = item.get("prioridade", "Não")
-                    
-                    # Filtro de exibição e rolagem automática de meses
-                    pertence_ao_mes_do_filtro = (chave_mes_ano_filtro in data_cad_str)
-                    ativo_para_rolagem = (status_atual in ["Pendente", "Em produção"])
-                    
-                    if pertence_ao_mes_do_filtro or ativo_para_rolagem:
-                        try: data_chegada_dt = datetime.strptime(data_cad_str, "%d/%m/%Y").date()
-                        except: data_chegada_dt = data_hoje_dt
-                        
-                        try: data_entrega_dt = datetime.strptime(data_ent_str, "%d/%m/%Y").date()
-                        except: data_entrega_dt = None
-                        
-                        if status_atual == "Pendente":
-                            dias_pendencia = (data_hoje_dt - data_chegada_dt).days; dias_producao = 0
-                        elif status_atual in ["Em production", "Em produção"]:
-                            if not data_ini_str:
-                                data_ini_str = datetime.now().strftime("%d/%m/%Y")
-                                item["data_inicio_producao"] = data_ini_str
-                            try: data_inicio_dt = datetime.strptime(data_ini_str, "%d/%m/%Y").date()
-                            except: data_inicio_dt = data_hoje_dt
-                            dias_pendencia = (data_inicio_dt - data_chegada_dt).days
-                            dias_producao = (data_hoje_dt - data_inicio_dt).days
-                        else:
-                            dias_pendencia = 0; dias_producao = 0
-                            
-                        if dias_pendencia < 0: dias_pendencia = 0
-                        if dias_producao < 0: dias_producao = 0
-                        
-                        # Regra das Bolinhas Inteligentes: Concluído apaga tudo!
-                        if status_atual == "Concluído":
-                            sinalizacao_final = "🔵"
-                        else:
-                            if data_entrega_dt and data_hoje_dt > data_entrega_dt: bolinha_status = "🔴"
-                            elif status_atual == "Pendente": bolinha_status = "🟠"
-                            else: bolinha_status = "🟢"
-                                
-                            if prioridade_atual == "Sim": sinalizacao_final = f"{bolinha_status} {bolinha_status}"
-                            else: sinalizacao_final = bolinha_status
-                        
-                        linhas_tabela_ap.append({
-                            "ID_Original": index, "🚨 Alerta": sinalizacao_final,
-                            "Nome do fornecedor / Marca": item.get("fornecedor", ""),
-                            "Número da O.F (Ordem de Fabricação)": item.get("of", ""),
-                            "Referência do Modelo (Peça)": item.get("referencia", ""),
-                            "Quantidade Total de Peças na Nota": item.get("qtd_prevista", 0),
-                            "Dias em pendência": int(dias_pendencia), "Dias em produção": int(dias_producao),
-                            "Data chegada": data_cad_str, "Data para entrega": data_ent_str,
-                            "Preço Unitário": float(item.get("preco", item.get("preco_unitario", 0.0))), 
-                            "Status": status_atual,
-                            "Porcentagem já produzido": f"{item.get('porcentagem_pronta', 0)}%", 
-                            "Peças Prontas Reais": int(item.get("qtd_pronta", 0)),
-                            "prioridade": prioridade_atual
-                        })
-                        
-             # O editor de dados fica devidamente embutido na parede correta do 'if' de lotes gerais
-                if lotes_existentes := linhas_tabela_ap:
-                    if "versao_esteira_ap_man" not in st.session_state: 
-                        st.session_state.versao_esteira_ap_man = 0
-                    chave_tabela_ap = f"tab_ap_manual_v25_v{st.session_state.versao_esteira_ap_man}"
-                    
-                    tabela_ap_editada = st.data_editor(
-                        linhas_tabela_ap,
-                        column_config={
-                            "ID_Original": None,
-                            "🚨 Alerta": st.column_config.TextColumn("🚨 Alerta", disabled=True),
-                            "Nome do fornecedor / Marca": st.column_config.TextColumn("Nome do fornecedor / Marca", disabled=True),
-                            "Número da O.F (Ordem de Fabricação)": st.column_config.TextColumn("Número da O.F (Ordem de Fabricação)", disabled=True),
-                            "Referência do Modelo (Peça)": st.column_config.TextColumn("Referência do Modelo (Peça)", disabled=True),
-                            "Quantidade Total de Peças na Nota": st.column_config.NumberColumn("Quantidade Total de Peças na Nota", disabled=True),
-                            "Dias em pendência": st.column_config.NumberColumn("Dias em pendência", disabled=True),
-                            "Dias em produção": st.column_config.NumberColumn("Dias em produção", disabled=True),
-                            "Data chegada": st.column_config.TextColumn("Data chegada", disabled=True),
-                            "Data para entrega": st.column_config.TextColumn("Data para entrega", disabled=True),
-                            "Preço Unitário": st.column_config.NumberColumn("Preço Unitário", format="R$ %.2f", disabled=True),
-                            "Status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Em produção"], required=True),
-                            "Porcentagem já produzido": st.column_config.SelectboxColumn("Porcentagem já produzido", options=["0%", "10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100%"], required=True),
-                            "Peças Prontas Reais": st.column_config.NumberColumn("✅ Peças Prontas Reais", disabled=True),
-                            "prioridade": st.column_config.SelectboxColumn("prioridade", options=["Não", "Sim"], required=True)
-                        },
-                        hide_index=True, use_container_width=True, key=chave_tabela_ap
-                    )
-                    
-                    # --- CAIXINHA DE EXCLUSÃO POSICIONADA COM CHAVE DINÂMICA ---
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    lista_ofs_excluir = [str(item["Número da O.F (Ordem de Fabricação)"]) for item in linhas_tabela_ap]
-                    chave_seletor_lixeira = f"sel_of_excluir_manual_v{st.session_state.versao_esteira_ap_man}"
-                    of_selecionada_excluir = st.selectbox("🗑️ Selecione O.F para excluir:", ["Selecionar..."] + lista_ofs_excluir, key=chave_seletor_lixeira)
-                    
-                    # Inteligência de checagem nativa integrada para tabela e lixeira
-                    dados_mudaram_ap = False
-                    if (chave_tabela_ap in st.session_state and st.session_state[chave_tabela_ap]["edited_rows"]) or (of_selecionada_excluir != "Selecionar..."):
-                        dados_mudaram_ap = True
-                        
-                    if dados_mudaram_ap:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        st.warning("⚠️ **Aviso de Alteração:** Mudanças ou exclusões pendentes na produção!")
-                        
-                        col_salvar_ap, col_cancelar_ap = st.columns(2)
-                        with col_salvar_ap:
-                            if st.button("💾 Confirmar Alterações e Exclusões", use_container_width=True, type="primary", key="btn_salvar_man_v28_fixed"):
-                                idx_global_deletar = None
-                                
-                                # 1. EXECUTA A EXCLUSÃO DA O.F SELECIONADA
-                                if of_selecionada_excluir != "Selecionar...":
-                                    for item_visao in linhas_tabela_ap:
-                                        if str(item_visao["Número da O.F (Ordem de Fabricação)"]) == of_selecionada_excluir:
-                                            idx_global_deletar = item_visao["ID_Original"]
-                                            break
-                                            
-                                    if idx_global_deletar is not None and idx_global_deletar < len(st.session_state.lotes_gerais):
-                                        st.session_state.lotes_gerais.pop(idx_global_deletar)
-                                
-                                # 2. EXECUTA OS SALVAMENTOS DE EDIÇÃO DAS OUTRAS LINHAS
-                                if chave_tabela_ap in st.session_state and st.session_state[chave_tabela_ap]["edited_rows"]:
-                                    for idx_visao_str, linha_edt in st.session_state[chave_tabela_ap]["edited_rows"].items():
-                                        idx_global = linhas_tabela_ap[int(idx_visao_str)]["ID_Original"]
-                                        
-                                        # Pula a linha se ela acabou de ser deletada
-                                        if idx_global_deletar is not None and idx_global == idx_global_deletar:
-                                            continue
-                                            
-                                        original = st.session_state.lotes_gerais[idx_global]
-                                        
-                                        status_salvar = linha_edt.get("Status", original.get("status", "Pendente"))
-                                        prioridade_salvar = linha_edt.get("prioridade", original.get("prioridade", "Não"))
-                                        pct_str = linha_edt.get("Porcentagem já produzido", f"{original.get('porcentagem_pronta', 0)}%")
-                                        pct_salvar = int(pct_str.replace("%", ""))
-                                        
-                                        valor_original_conferente = int(original.get("qtd_pronta", 0))
-                                        
-                                        if status_salvar == "Em produção" and not original.get("data_inicio_producao"):
-                                            st.session_state.lotes_gerais[idx_global]["data_inicio_producao"] = datetime.now().strftime("%d/%m/%Y")
-                                            
-                                        st.session_state.lotes_gerais[idx_global]["status"] = status_salvar
-                                        st.session_state.lotes_gerais[idx_global]["porcentagem_pronta"] = pct_salvar
-                                        st.session_state.lotes_gerais[idx_global]["qtd_pronta"] = valor_original_conferente
-                                        st.session_state.lotes_gerais[idx_global]["prioridade"] = prioridade_salvar
-                                    
-                                if chave_tabela_ap in st.session_state:
-                                    del st.session_state[chave_tabela_ap]
-                                st.session_state.versao_esteira_ap_man += 1
-                                
-                                super_robo_trancar_memoria_para_hd()
-                                st.success("🎉 Alterações salvas com sucesso! Dados da DLR protegidos contra qualquer reset!")
-                                st.rerun()
-                                
-                        with col_cancelar_ap:
-                            if st.button("❌ Descartar Mudanças e Voltar", use_container_width=True, key="btn_desc_man_v25"):
-                                # Limpa o cache técnico da planilha
-                                if chave_tabela_ap in st.session_state: 
-                                    del st.session_state[chave_tabela_ap]
-                                    
-                                # CORREÇÃO DE OURO: Atualiza a versão para forçar a lixeira a resetar para "Selecionar..."
-                                st.session_state.versao_esteira_ap_man += 1
-                                st.rerun()
-                else:
-                    st.info("💡 Nenhum lote ativo ou cadastrado neste período.")
-            else:
-                st.info("💡 Nenhum lote de tecido registrado na produção até o momento.")
-                    
-                                 
-    # ==============================================================================
-    # SUB-PÁGINA: PEÇAS PRODUZIDAS POR DIA (P.D) — COM RESET AUTOMÁTICO
-    # ==============================================================================
-    elif st.session_state.pagina_man_atual == "📅 Peças Produzidas por Dia (P.D)":
-        st.subheader("📅 Registro de Production Diária Total")
-        
-        # Filtros de mês e ano para exibição do gráfico
-        col_m_pd, col_a_pd = st.columns(2)
-        with col_m_pd:
-            mes_pd_sel = st.selectbox("Visualizar Gráfico do Mês:", ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"], index=8, key="pd_mes_grafico")
-        with col_a_pd:
-            ano_pd_sel = st.selectbox("Visualizar Gráfico do Ano:", ["2026", "2027", "2028", "2029", "2030"], index=0, key="pd_ano_grafico")
-
-        meses_num = {"Janeiro":"01", "Fevereiro":"02", "Março":"03", "Abril":"04", "Maio":"05", "Junho":"06", "Julho":"07", "Agosto":"08", "Setembro":"09", "Outubro":"10", "Novembro":"11", "Dezembro":"12"}
-        mes_filtro = meses_num[mes_pd_sel]
-
-        if "banco_producao_diaria" not in st.session_state:
-            st.session_state.banco_producao_diaria = {}
-
-        # Inicializa o controlador de reset do formulário se não existir
-        if "versao_form_pd" not in st.session_state:
-            st.session_state.versao_form_pd = 0
-
-        st.markdown("### 📥 Lançar Fechamento do Dia")
-        
-        col_l1, col_l2 = st.columns(2)
-        with col_l1:
-            data_lancamento = st.date_input("📅 Selecione o Dia do Fechamento:", value=datetime.now(), key=f"pd_data_input_v26_{st.session_state.versao_form_pd}")
-        with col_l2:
-            # Vincula o valor à chave dinâmica para permitir o reset automático para zero
-            qtd_pronta_dia = st.number_input("🔢 Quantidade de Peças Produzidas no Dia:", min_value=0, step=1, value=0, key=f"pd_qtd_input_v26_{st.session_state.versao_form_pd}")
-            
-        data_txt = data_lancamento.strftime("%d/%m/%Y")
-        
-        # O aviso só aparece se a quantidade digitada na caixinha for maior que zero
-        if qtd_pronta_dia > 0:
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.warning(f"⚠️ **Aviso de Alteração:** Deseja registrar **{qtd_pronta_dia} peças** para a data de **{data_txt}**? Confirme abaixo.")
-            
-            col_salvar_pd, col_cancelar_pd = st.columns(2)
-            with col_salvar_pd:
-                if st.button("💾 Confirmar e Salvar Produção do Dia", use_container_width=True, type="primary", key="btn_confirmar_salvar_pd_v26"):
-                    # Grava no dicionário estável
-                    st.session_state.banco_producao_diaria[data_txt] = int(qtd_pronta_dia)
-                    
-                    # Tranca direto no arquivo .db do HD
-                    super_robo_trancar_memoria_para_hd()
-                    
-                    # Muda a versão da chave para forçar o campo numérico a voltar para 0
-                    st.session_state.versao_form_pd += 1
-                    
-                    st.success(f"🎉 Sucesso! **{qtd_pronta_dia} peças** foram gravadas em definitivo no HD para o dia {data_txt}!")
-                    st.rerun()
-                    
-            with col_cancelar_pd:
-                if st.button("❌ Descartar Lançamento", use_container_width=True, key="btn_cancelar_pd_v26"):
-                    st.session_state.versao_form_pd += 1
-                    st.rerun()
-
-        # --- CONSTRUÇÃO DO GRÁFICO DIÁRIO CONTENDO TODOS OS DIAS DO MÊS ---
-        dados_grafico_pd = []
-        
-        if mes_filtro in ["01", "03", "05", "07", "08", "10", "12"]: dias_no_mes = 31
-        elif mes_filtro in ["04", "06", "09", "11"]: dias_no_mes = 30
-        else: dias_no_mes = 28 # Fevereiro
-        
-        for dia in range(1, dias_no_mes + 1):
-            data_formatada = f"{dia:02d}/{mes_filtro}/{ano_pd_sel}"
-            total_do_dia = st.session_state.banco_producao_diaria.get(data_formatada, 0)
-            
-            dados_grafico_pd.append({
-                "Dia do Mês": f"Dia {dia:02d}",
-                "Peças Prontas (Total Fábrica)": total_do_dia
-            })
-
-        # --- EXIBIÇÃO VISUAL DO RENDIMENTO NO GRÁFICO MENSAL ---
-        st.markdown(f"#### 📈 Gráfico de Rendimento Global: {mes_pd_sel} de {ano_pd_sel}")
-        st.bar_chart(data=dados_grafico_pd, x="Dia do Mês", y="Peças Prontas (Total Fábrica)", use_container_width=True, height=350)
-        
-        pecas_totais_mes = sum([item["Peças Prontas (Total Fábrica)"] for item in dados_grafico_pd])
-        st.info(f"📊 **Fechamento do Período:** O volume total acumulado em {mes_pd_sel} somou **{pecas_totais_mes} peças prontas**!")
-
-# --- ACIONADOR AUTOMÁTICO INVISÍVEL DO SUPER ROBÔ DA DLR ---
-super_robo_trancar_memoria_para_hd()                
-                   
+        else:
+            st.info("💡 Nenhuma hora de ponto foi registrada para este mês ainda na conferência.")
