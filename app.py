@@ -164,6 +164,21 @@ def inicializar_banco_dados():
         )
     """)
 
+    # ⚙️ GAVETA MASTER DE BATIDAS DIÁRIAS (MODELO LIMPO SEM PRÉ-PREENCHIMENTO)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS registro_ponto_diario (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mes_ano TEXT,
+            nome_costureira TEXT,
+            dia_mes TEXT,
+            entrada_1 TEXT DEFAULT '',
+            saida_1 TEXT DEFAULT '',
+            entrada_2 TEXT DEFAULT '',
+            saida_2 TEXT DEFAULT '',
+            horas_trabalhadas_dia REAL DEFAULT 0.0
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -271,6 +286,8 @@ else:
                 "📋 Lotes em Andamento": "📋 Lotes em Andamento",
                 "🚚 Serviços Externos": "🚚 Serviços Externos",
                 "💰 Financeiro Geral": "💰 Financeiro Geral",
+                # 📥 INJEÇÃO MASTER: Adicionado o ponto no painel do administrador!
+                "📥 Importar Ponto": "📥 Importar Ponto",
                 "📅 Extrato do Mês": "📅 Extrato do Mês"
             }
             for label, pag_id in paginas_admin.items():
@@ -360,13 +377,14 @@ else:
             entradas_manuais = float(res_cx_e[0]) if res_cx_e and res_cx_e[0] is not None else 0.0
             entradas_caixa_mes = entradas_lotes + entradas_manuais
 
-            # --- 🔸 2. SOMA AS SAÍDAS GERAIS (GÊMEO IDENTICO DA TABELA VISUAL DO EXTRATO GERAL) ---
-            # 🚀 SINCRONISMO ABSOLUTO: Executa exatamente a mesma regra linha por linha da planilha E.G!
+            # --- 🔸 2. SOMA AS SAÍDAS GERAIS (NOVA REGRA MESTRE: ISOLA VALE DO MÊS + APURA PARCELAS FUTURAS) ---
+            # 🚀 DIRETRIZ INDESTRUTÍVEL: Vales do mês corrente saem da soma (vão para a folha), mas o restante de parcelas futuras pontua no card!
             conn_saidas_master = sqlite3.connect("dlr_confecoes_v3.db")
             cursor_saidas_master = conn_saidas_master.cursor()
             
+            # Buscamos a coluna total_parcelas para saber com exatidão a engenharia do parcelamento
             cursor_saidas_master.execute("""
-                SELECT tipo_movimentacao, parcela_atual, valor_total, valor_parcela 
+                SELECT tipo_movimentacao, parcela_atual, total_parcelas, valor_total, valor_parcela 
                 FROM livro_caixa 
                 WHERE mes_ano = ?
             """, (periodo_ativo_chave,))
@@ -378,43 +396,73 @@ else:
             for mov_c in todos_movimentos_caixa:
                 t_mov = str(mov_c[0]).strip()
                 p_atual = int(mov_c[1]) if mov_c[1] is not None else 1
-                v_total = float(mov_c[2]) if mov_c[2] is not None else 0.0
-                v_parc = float(mov_c[3]) if mov_c[3] is not None else 0.0
+                p_totais = int(mov_c[2]) if mov_c[2] is not None else 1
+                v_total = float(mov_c[3]) if mov_c[3] is not None else 0.0
+                v_parc = float(mov_c[4]) if mov_c[4] is not None else 0.0
                 
-                # REPLICA A REGRA DA SUA TABELA: Se for Vale, só computa no card se for a parcela 1 e pega o valor TOTAL bruto!
+                # 💸 RECALIBRAÇÃO DE VALES: Isola o adiantamento atual e computa o saldo restante pendente
                 if t_mov == "Vale":
-                    if p_atual == 1:
-                        saidas_caixa_mes_calculado += v_total
-                # Se for Saída manual comum (Gasolina, Contas), soma o valor normal da despesa
+                    # Se o vale for parcelado (ex: 2x) e for a parcela inicial (mês de origem), joga no card o restante pendente
+                    if p_totais > 1 and p_atual == 1:
+                        saldo_restante_comprometido = v_total - v_parc
+                        saidas_caixa_mes_calculado += saldo_restante_comprometido
+                    # Vales de parcela única (1/1) ou parcelas correntes entram como R$ 0,00 (já computados na folha)
+                    
+                # ⛽ DESPESAS MANUAIS PURAS: Gasolina, saco de lixo, consertos somam integralmente na hora
                 elif t_mov == "Saída":
                     saidas_caixa_mes_calculado += v_parc
             
-            # Tranca o valor blindado final na variável oficial do Dashboard para renderizar no card laranja
+            # Tranca a nova somatória livre de duplicidades na variável oficial do Dashboard
             saidas_caixa_mes = float(saidas_caixa_mes_calculado)
-            # 3. Soma a Folha Interna Inteligente (Fixo Integral + Horistas por Produção de Ponto)
+            # --- 🔸 3. SOMA A FOLHA INTERNA INTELIGENTE (SINCRONISMO COM O NOVO PONTO DIÁRIO) ---
+            # 🚀 BLINDAGEM COMPLETA: Refaz exatamente a mesma regra de negócios e loops da tabela visual F.P!
             total_folha_mes = 0.0
             cursor.execute("SELECT nome, tipo_pagamento, valor_base, total_vales FROM historico_folha_pagamento WHERE mes_ano = ?", (periodo_ativo_chave,))
             funcionarios_mes = cursor.fetchall()
             
+            cursor_fp_dash = conn.cursor()
             for func_f in funcionarios_mes:
                 f_nome, f_tipo, f_valor_base, f_vales = func_f
                 f_valor_base = float(f_valor_base) if f_valor_base else 0.0
                 f_vales = float(f_vales) if f_vales else 0.0
                 
-                # REGRA FIXO: Adiciona o valor base integral abatendo os vales do mês
-                if f_tipo == "Fixo":
-                    total_folha_mes += (f_valor_base - f_vales)
+                v_liquido_f = 0.0
+                
+                # REGRA 1: POR HORA (HORISTAS) -> Puxa a soma em tempo real do novo ponto diário de matriz!
+                if f_tipo == "Por hora":
+                    cursor_fp_dash.execute("""
+                        SELECT SUM(horas_trabalhadas_dia) 
+                        FROM registro_ponto_diario 
+                        WHERE nome_costureira = ? AND mes_ano = ?
+                    """, (f_nome, periodo_ativo_chave))
+                    res_h_ponto = cursor_fp_dash.fetchone()
+                    horas_reais = float(res_h_ponto[0]) if res_h_ponto and res_h_ponto[0] is not None else 0.0
                     
-                # REGRA POR HORA: Busca as horas reais e faz a multiplicação (Se não trabalhou, é R$ 0,00)
-                elif f_tipo == "Por hora":
-                    cursor.execute("SELECT horas_totais FROM registro_ponto_horistas WHERE costureira = ? AND mes_ano = ?", (f_nome, periodo_ativo_chave))
-                    res_ponto = cursor.fetchone()
+                    v_liquido_f = (f_base * horas_reais) - f_vales if 'f_base' in locals() else (f_valor_base * horas_reais) - f_vales
                     
-                    horas_trabalhadas = float(res_ponto[0]) if res_ponto and res_ponto[0] is not None else 0.0
+                # REGRA 2: POR OPERAÇÃO (CÚPONS) -> Soma a produção real acumulada na producao_hora_hora
+                elif f_tipo == "Por operação":
+                    cursor_fp_dash.execute("""
+                        SELECT SUM(valor_total) 
+                        FROM producao_hora_hora 
+                        WHERE costureira = ? AND mes_ano = ?
+                    """, (f_nome, periodo_ativo_chave))
+                    res_prod = cursor_fp_dash.fetchone()
+                    total_produzido = float(res_prod[0]) if res_prod and res_prod[0] is not None else 0.0
                     
-                    # Carga horária multiplicada pelo salário hora estabelecido na lista, abatendo vales
-                    valor_hora_calculado = (f_valor_base * horas_trabalhadas) - f_vales
-                    total_folha_mes += valor_hora_calculado
+                    v_liquido_f = total_produzido - f_vales
+                    
+                # REGRA 3: FIXOS -> Valor base bruto descontando os vales adiantados
+                else:
+                    v_liquido_f = f_valor_base - f_vales
+                    
+                # Proteção para o líquido de cada funcionário nunca ficar negativo na somatória do card
+                if v_liquido_f < 0:
+                    v_liquido_f = 0.0
+                    
+                total_folha_mes += v_liquido_f
+            
+            cursor_fp_dash.close()
             
             # 4. Soma a Folha Externa vinda dos Serviços Externos Concluídos do mês
             cursor.execute("SELECT SUM(valor_total) FROM servicos_externos WHERE mes_ano = ?", (periodo_ativo_chave,))
@@ -423,7 +471,7 @@ else:
             
             conn.close()
 
-            # Cálculo automático do Saldo Líquido Real Comercial
+            # Cálculo automático e ajustado do Saldo Líquido Real Comercial
             saldo_liquido_mes = entradas_caixa_mes - saidas_caixa_mes - total_folha_mes - total_externo_mes
 
             # --- RENDERIZADOR DOS CARDS MASTER SUPREMOS — CENTRALIZAÇÃO ABSOLUTA RECALIBRADA ---
@@ -652,21 +700,32 @@ else:
 
                     conn = sqlite3.connect("dlr_confecoes_v3.db")
                     cursor = conn.cursor()
-                    # 🚀 CORREÇÃO DE OURO: Busca todo mundo que não está demitido ou resgata do histórico do mês passado!
-                    cursor.execute("SELECT nome, tipo_pagamento, valor_base, chave_pix FROM funcionarios WHERE status_cadastro != 'Demitido'")
+                    
+                    # 🚀 CONEXÃO DE OURO: Busca primeiramente os dados reais com os valores alterados do mês passado
+                    cursor.execute("SELECT nome, tipo_pagamento, valor_base, chave_pix FROM historico_folha_pagamento WHERE mes_ano = ?", (chave_periodo_anterior,))
                     funcionarios_vivos = cursor.fetchall()
                     
+                    # Se por acaso o mês passado estiver vazio, busca da tabela geral de segurança
                     if not funcionarios_vivos:
-                        cursor.execute("SELECT nome, tipo_pagamento, valor_base, chave_pix FROM historico_folha_pagamento WHERE mes_ano = ?", (chave_periodo_anterior,))
+                        cursor.execute("SELECT nome, tipo_pagamento, valor_base, chave_pix FROM funcionarios WHERE status_cadastro != 'Demitido'")
                         funcionarios_vivos = cursor.fetchall()
                         
                     for f_vivo in funcionarios_vivos:
                         v_nome, v_tipo, v_valor, v_pix = f_vivo
+                        v_valor = float(v_valor) if v_valor is not None else 0.0
+                        
                         cursor.execute("SELECT id FROM historico_folha_pagamento WHERE nome = ? AND mes_ano = ?", (v_nome, periodo_ativo_chave))
                         if not cursor.fetchone():
-                            cursor.execute("INSERT INTO historico_folha_pagamento (mes_ano, nome, tipo_pagamento, valor_base, chave_pix, total_vales, status_pagto) VALUES (?, ?, ?, ?, ?, 0.0, 'Pendente')", (periodo_ativo_chave, v_nome, v_tipo, v_valor, v_pix))
-                    conn.commit(); conn.close()
-                    st.success("🎉 Lista de colaboradores sincronizada com o mês atual!"); st.rerun()
+                            cursor.execute("""
+                                INSERT INTO historico_folha_pagamento 
+                                (mes_ano, nome, tipo_pagamento, valor_base, chave_pix, total_vales, status_pagto) 
+                                VALUES (?, ?, ?, ?, ?, 0.0, 'Pendente')
+                            """, (periodo_ativo_chave, v_nome, v_tipo, v_valor, v_pix))
+                            
+                    conn.commit()
+                    conn.close()
+                    st.success("🎉 Lista de colaboradores e valores reais sincronizados com sucesso!")
+                    st.rerun()
 
                 st.markdown("<br>", unsafe_allow_html=True)
                 
@@ -1096,6 +1155,146 @@ else:
                     # 🎉 Sucesso! O próprio Streamlit já limpou os campos das caixas por causa do clear_on_submit!
                     st.success(f"🎉 Lançamento de {tipo_banco_salvar} registrado com sucesso!")
                     st.rerun()
+
+                    # 📥 ESPELHO DE PONTO CLONADO COMPLETO PARA O PERFIL DO ADMINISTRADOR (24H NUVEM)
+        # ==============================================================================
+        if menu_selecionado == "📥 Importar Ponto":
+            st.title("📥 Registro Manual de Ponto — Costureiras Horistas")
+            st.markdown(f"**Competência Ativa Administrativa:** {mes_ativo_txt} de {ano_ativo_txt}")
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            conn = sqlite3.connect("dlr_confecoes_v3.db")
+            cursor = conn.cursor()
+            
+            # 🚀 CORREÇÃO DEFINITIVA: Busca todos os nomes sem filtros de cargo ou manual
+            cursor.execute("""
+                SELECT DISTINCT TRIM(nome) AS nome
+                FROM funcionarios
+                WHERE nome IS NOT NULL
+                  AND TRIM(nome) <> ''
+                ORDER BY nome COLLATE NOCASE ASC
+            """)
+            
+            # 🎯 DESEMPACOTA COM SEGURANÇA: O row[0] captura o texto puro sem parênteses chatos!
+            lista_horistas_ponto = [
+                str(row[0]).strip()
+                for row in cursor.fetchall()
+                if row and row[0] is not None
+            ]
+            conn.close()
+            
+            if lista_horistas_ponto:
+                # 👤 SELETOR ADMINISTRATIVO MASTER: Exibe toda a empresa ativa sem travas de cargo!
+                cost_ponto_sel = st.selectbox(
+                    "👤 Selecionar Colaborador para Visualizar o Ponto:", 
+                    lista_horistas_ponto, 
+                    key="pt_cost_admin_v3"
+                )
+                
+                # Garante o calendário de 31 dias limpos no cofre v3 de forma blindada
+                conn = sqlite3.connect("dlr_confecoes_v3.db")
+                cursor = conn.cursor()
+                for d in range(1, 32):
+                    dia_str = f"{d:02d}"
+                    cursor.execute("SELECT id FROM registro_ponto_diario WHERE mes_ano = ? AND nome_costureira = ? AND dia_mes = ?", (periodo_ativo_chave, cost_ponto_sel, dia_str))
+                    if not cursor.fetchone():
+                        cursor.execute("INSERT INTO registro_ponto_diario (mes_ano, nome_costureira, dia_mes, entrada_1, saida_1, entrada_2, saida_2, horas_trabalhadas_dia) VALUES (?, ?, ?, '', '', '', '', 0.0)", (periodo_ativo_chave, cost_ponto_sel, dia_str))
+                conn.commit()
+                conn.close()
+                
+                # Puxa os dados para a matriz horizontal do Pandas
+                conn = sqlite3.connect("dlr_confecoes_v3.db")
+                df_ponto_bruto = pd.read_sql_query(f"SELECT id, dia_mes, entrada_1, saida_1, entrada_2, saida_2, horas_trabalhadas_dia FROM registro_ponto_diario WHERE mes_ano = '{periodo_ativo_chave}' AND nome_costureira = '{cost_ponto_sel}' ORDER BY dia_mes ASC", conn)
+                conn.close()
+                
+                matriz_ponto = {"Marcação / Batida": ["🕐 Entrada 1", "⏳ Saída 1 (Almoço)", "🕐 Entrada 2", "⏳ Saída 2", "📊 Total Dia (hrs)"]}
+                for _, row_b in df_ponto_bruto.iterrows():
+                    d_col = str(row_b['dia_mes'])
+                    matriz_ponto[d_col] = [
+                        str(row_b['entrada_1'] if row_b['entrada_1'] is not None else ''),
+                        str(row_b['saida_1'] if row_b['saida_1'] is not None else ''),
+                        str(row_b['entrada_2'] if row_b['entrada_2'] is not None else ''),
+                        str(row_b['saida_2'] if row_b['saida_2'] is not None else ''),
+                        str(f"{float(row_b['horas_trabalhadas_dia']):.2f} hrs") if row_b['horas_trabalhadas_dia'] else '0.00 hrs'
+                    ]
+                df_ponto_horizontal = pd.DataFrame(matriz_ponto)
+                
+                # Engenharia de cálculos dos cards cruzados
+                horas_totais_mes = float(df_ponto_bruto['horas_trabalhadas_dia'].sum()) if not df_ponto_bruto.empty else 0.0
+                conn_v_h = sqlite3.connect("dlr_confecoes_v3.db"); cursor_vh = conn_v_h.cursor()
+                cursor_vh.execute("SELECT valor_base FROM historico_folha_pagamento WHERE nome = ? AND mes_ano = ?", (cost_ponto_sel, periodo_ativo_chave))
+                res_vh = cursor_vh.fetchone()
+                if not res_vh:
+                    cursor_vh.execute("SELECT valor_base FROM funcionarios WHERE nome = ?", (cost_ponto_sel,))
+                    res_vh = cursor_vh.fetchone()
+                conn_v_h.close()
+                valor_por_hora = float(res_vh[0]) if res_vh and res_vh[0] is not None else 0.0
+                salario_acumulado_ponto = horas_totais_mes * valor_por_hora
+
+                # Busca o faturamento produzido com suporte a letras maiúsculas (UPPER)
+                try:
+                    conn_prod_f = sqlite3.connect("dlr_confecoes_v3.db")
+                    df_prod_func = pd.read_sql_query(f"SELECT SUM(valor_total) FROM producao_hora_hora WHERE mes_ano = '{periodo_ativo_chave}' AND UPPER(costureira) = UPPER('{cost_ponto_sel}')", conn_prod_f)
+                    conn_prod_f.close()
+                    total_produzido_f_mes = float(df_prod_func.iloc[0, 0]) if not df_prod_func.empty and df_prod_func.iloc[0, 0] is not None else 0.0
+                except:
+                    total_produzido_f_mes = 0.0
+
+                balanco_eficiencia_real = total_produzido_f_mes - salario_acumulado_ponto
+                if balanco_eficiencia_real >= 0:
+                    cor_balanco_card = "#2E7D32"; texto_balanco_sinal = "PRODUÇÃO MAIOR (POSITIVO)"
+                else:
+                    cor_balanco_card = "#C62828"; texto_balanco_sinal = "PRODUÇÃO MENOR (NEGATIVO)"
+                
+                # Desenha a grade com as 4 caixas simétricas coloridas no topo
+                col_c1, col_c2, col_c3, col_c4 = st.columns(4, gap="small")
+                with col_c1:
+                    st.markdown(f"<div style='background-color: #4A154B; padding: 10px 5px; border-radius: 6px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; height: 75px;'><div style='font-size: 11px; opacity: 0.9; text-transform: uppercase;'>🗂️ Horas no Mês</div><h4 style='margin: 4px 0px; color: white; font-size: 19px; font-weight: bold;'>{horas_totais_mes:.2f} hrs</h4></div>", unsafe_allow_html=True)
+                with col_c2:
+                    st.markdown(f"<div style='background-color: #E65100; padding: 10px 5px; border-radius: 6px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; height: 75px;'><div style='font-size: 11px; opacity: 0.9; text-transform: uppercase;'>💰 Salário Acumulado</div><h4 style='margin: 4px 0px; color: white; font-size: 19px; font-weight: bold;'>R$ {salario_acumulado_ponto:,.2f}</h4></div>", unsafe_allow_html=True)
+                with col_c3:
+                    st.markdown(f"<div style='background-color: #0288D1; padding: 10px 5px; border-radius: 6px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; height: 75px;'><div style='font-size: 11px; opacity: 0.9; text-transform: uppercase;'>🧵 Total Produzido</div><h4 style='margin: 4px 0px; color: white; font-size: 19px; font-weight: bold;'>R$ {total_produzido_f_mes:,.2f}</h4></div>", unsafe_allow_html=True)
+                with col_c4:
+                    st.markdown(f"<div style='background-color: {cor_balanco_card}; padding: 10px 5px; border-radius: 6px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; height: 75px;'><div style='font-size: 9px; opacity: 0.85;'>📊 {texto_balanco_sinal}</div><h4 style='margin: 4px 0px; color: white; font-size: 19px; font-weight: bold;'>R$ {balanco_eficiencia_real:,.2f}</h4></div>", unsafe_allow_html=True)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                config_colunas_horiz = {"Marcação / Batida": st.column_config.TextColumn("⏱️ Marcação / Batida", width=170, disabled=True)}
+                for d in range(1, 32):
+                    config_colunas_horiz[f"{d:02d}"] = st.column_config.TextColumn(f"{d:02d}", width=65, disabled=False)
+                
+                chave_ed_admin = f"editor_ponto_admin_v5_{cost_ponto_sel}_{periodo_ativo_chave}"
+                tabela_ponto_editada = st.data_editor(df_ponto_horizontal, column_config=config_colunas_horiz, hide_index=True, use_container_width=True, key=chave_ed_admin)
+                
+                # Motor de salvamento e recálculo automático em tempo real no cofre v3
+                if chave_ed_admin in st.session_state and st.session_state[chave_ed_admin]["edited_rows"]:
+                    conn = sqlite3.connect("dlr_confecoes_v3.db"); cursor = conn.cursor()
+                    colunas_b = ["entrada_1", "saida_1", "entrada_2", "saida_2"]
+                    for idx_l, mudancas in st.session_state[chave_ed_admin]["edited_rows"].items():
+                        num_l = int(idx_l)
+                        if num_l >= 4: continue
+                        campo_b = colunas_b[num_l]
+                        for dia_m, novo_h in mudancas.items():
+                            horario_t = str(novo_h).strip(); dia_c = str(dia_m).zfill(2)
+                            cursor.execute(f"UPDATE registro_ponto_diario SET {campo_b} = ? WHERE mes_ano = ? AND nome_costureira = ? AND dia_mes = ?", (horario_t, periodo_ativo_chave, cost_ponto_sel, dia_c))
+                            
+                            cursor.execute("SELECT entrada_1, saida_1, entrada_2, saida_2 FROM registro_ponto_diario WHERE mes_ano = ? AND nome_costureira = ? AND dia_mes = ?", (periodo_ativo_chave, cost_ponto_sel, dia_c))
+                            e1, s1, e2, s2 = cursor.fetchone()
+                            minutos = 0.0; fmt = "%H:%M"
+                            if len(str(e1)) == 5 and len(str(s1)) == 5 and ":" in str(e1):
+                                try: minutos += (datetime.datetime.strptime(str(s1), fmt) - datetime.datetime.strptime(str(e1), fmt)).seconds / 60
+                                except: pass
+                            if len(str(e2)) == 5 and len(str(s2)) == 5 and ":" in str(e2):
+                                try: minutos += (datetime.datetime.strptime(str(s2), fmt) - datetime.datetime.strptime(str(e2), fmt)).seconds / 60
+                                except: pass
+                            cursor.execute("UPDATE registro_ponto_diario SET horas_trabalhadas_dia = ? WHERE mes_ano = ? AND nome_costureira = ? AND dia_mes = ?", (round(minutos / 60, 2), periodo_ativo_chave, cost_ponto_sel, dia_c))
+                    
+                    cursor.execute("SELECT SUM(horas_trabalhadas_dia) FROM registro_ponto_diario WHERE mes_ano = ? AND nome_costureira = ?", (periodo_ativo_chave, cost_ponto_sel))
+                    nova_soma = float(cursor.fetchone()[0]) or 0.0
+                    dt_hoje_txt = datetime.datetime.now().strftime("%d/%m/%Y")
+                    cursor.execute("UPDATE registro_ponto_horistas SET horas_totais = ?, data_registro = ? WHERE costureira = ? AND mes_ano = ?", (nova_soma, dt_hoje_txt, cost_ponto_sel, periodo_ativo_chave))
+                    conn.commit(); conn.close(); st.rerun()
+            else:
+                st.info("💡 Nenhuma costureira horista localizada.")
                     
 
   # ==============================================================================
@@ -1474,92 +1673,96 @@ else:
                     st.info(f"💡 Nenhum adiantamento ou vale registrado em {periodo_ext_chave}.")
 
             # ==============================================================================
-            # 📄 OPÇÃO 3: FOLHA DE PAGAMENTO (F.P) — INTEGRAÇÃO DEFINITIVA DO LIVRO CAIXA V3
+            # 📄 OPÇÃO 3: VISUALIZANDO ESPELHO DE FOLHA DE PAGAMENTOS (F.P)
             # ==============================================================================
             elif st.session_state.sub_menu_extratos == "F.P":
-                st.markdown(f"### 📂 Visualizando: Espelho de Folha de Pagamentos ({mes_ext_sel}/{ano_ext_sel})")
-                st.write("Abaixo está o fechamento financeiro do mês com cálculo automático de horas e desconto de vales:")
-                st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+                st.subheader(f"📂 Visualizando: Espelho de Folha de Pagamentos ({mes_ext_sel}/{ano_ext_sel})")
                 
                 conn = sqlite3.connect("dlr_confecoes_v3.db")
-                # Puxa as informações base da folha histórica das colaboradoras
-                df_folha_bruta = pd.read_sql_query(f"SELECT id, nome as 'Funcionário', tipo_pagamento as 'Tipo', valor_base as 'Base (R$)', status_pagto as 'Status' FROM historico_folha_pagamento WHERE mes_ano = '{periodo_ext_chave}'", conn)
+                # 🚀 BUSCA MESTRE: Puxa os dados base do histórico de funcionários do respectivo mês
+                df_fp_bruto = pd.read_sql_query(f"""
+                    SELECT id, nome, tipo_pagamento, valor_base, total_vales, status_pagto
+                    FROM historico_folha_pagamento
+                    WHERE mes_ano = '{periodo_ext_chave}'
+                    ORDER BY tipo_pagamento DESC, nome ASC
+                """, conn)
                 
-                linhas_folha_calculada = []
+                linhas_folha_calculadas = []
+                cursor_fp = conn.cursor()
                 
-                if not df_folha_bruta.empty:
-                    cursor = conn.cursor()
-                    for idx, row_f in df_folha_bruta.iterrows():
-                        f_id = int(row_f["id"])
-                        f_nome = str(row_f["Funcionário"]).strip()
-                        f_tipo = str(row_f["Tipo"]).strip()
-                        f_base = float(row_f["Base (R$)"])
-                        f_status = str(row_f["Status"]).strip()
+                if not df_fp_bruto.empty:
+                    for _, row_fp in df_fp_bruto.iterrows():
+                        f_id = row_fp['id']
+                        f_nome = row_fp['nome']
+                        f_tipo = row_fp['tipo_pagamento']
+                        f_base = float(row_fp['valor_base'] if row_fp['valor_base'] else 0.0)
+                        f_vales = float(row_fp['total_vales'] if row_fp['total_vales'] else 0.0)
+                        f_status = row_fp['status_pagto']
                         
-                         # 🚀 MOTOR DE DESCONTO SINCRONIZADO: Busca rigorosamente por tipo_movimentacao = 'Vale'
-                        nome_busca_minusculo = f"%{f_nome.lower()}%"
+                        v_liquido = 0.0
                         
-                        cursor.execute("""
-                            SELECT SUM(valor_parcela) 
-                            FROM livro_caixa 
-                            WHERE mes_ano = ? 
-                              AND tipo_movimentacao = 'Vale' 
-                              AND LOWER(descricao) LIKE ?
-                        """, (periodo_ext_chave, nome_busca_minusculo))
-                        res_vales_cx = cursor.fetchone()
-                        
-                        # 🚀 DESEMPACOTAÇÃO SEGURA: Rasga a tupla do SQLite pegando a posição [0] com tratamento de nulos
-                        f_vales = float(res_vales_cx[0]) if res_vales_cx and res_vales_cx[0] is not None else 0.0
-                        
-                        # ⚙️ ENGENHARIA DE CÁLCULO FINANCEIRO
+                        # 🕐 REGRA 1: SE FOR COSTUREIRA POR HORA -> Busca a soma real do novo cartão de ponto diário!
                         if f_tipo == "Por hora":
-                            # Busca as horas reais registradas no Importar Ponto
-                            cursor.execute("SELECT horas_totais FROM registro_ponto_horistas WHERE costureira = ? AND mes_ano = ?", (f_nome, periodo_ext_chave))
-                            res_pt = cursor.fetchone()
-                            horas_reais = float(res_pt[0]) if res_pt and res_pt[0] is not None else 0.0
-                            f_liquido = (f_base * horas_reais) - f_vales
-                        else:
-                            # Funcionários Fixos e por Operação: Salário Base - Vales coletados
-                            f_liquido = f_base - f_vales
+                            cursor_fp.execute("""
+                                SELECT SUM(horas_trabalhadas_dia) 
+                                FROM registro_ponto_diario 
+                                WHERE nome_costureira = ? AND mes_ano = ?
+                            """, (f_nome, periodo_ext_chave))
+                            res_h_ponto = cursor_fp.fetchone()
+                            horas_reais = float(res_h_ponto[0]) if res_h_ponto and res_h_ponto[0] is not None else 0.0
                             
-                        if f_liquido < 0: f_liquido = 0.0
-                        
-                        linhas_folha_calculada.append({
-                            "ID_FP": f_id, "Funcionário": f_nome, "Tipo": f_tipo,
-                            "Base (R$)": f_base, "Vales (R$)": f_vales, "Líquido (R$)": f_liquido, "Status": f_status
+                            # Salário Bruto (Horas * Valor da Hora) abatendo os vales do mês
+                            v_liquido = (f_base * horas_reais) - f_vales
+                            
+                        # 🧵 REGRA 2: SE FOR POR OPERAÇÃO (CÚPONS) -> Busca o total produzido na tabela producao_hora_hora
+                        elif f_tipo == "Por operação":
+                            cursor_fp.execute("""
+                                SELECT SUM(valor_total) 
+                                FROM producao_hora_hora 
+                                WHERE costureira = ? AND mes_ano = ?
+                            """, (f_nome, periodo_ext_chave))
+                            res_prod = cursor_fp.fetchone()
+                            total_produzido = float(res_prod[0]) if res_prod and res_prod[0] is not None else 0.0
+                            
+                            v_liquido = total_produzido - f_vales
+                            
+                        # 🧱 REGRA 3: SE FOR FIXO MENSAL -> Pega o valor base integral abatendo os vales
+                        else:
+                            v_liquido = f_base - f_vales
+                            
+                        # Proteção para o salário líquido nunca exibir valores negativos doidos na planilha
+                        if v_liquido < 0: 
+                            v_liquido = 0.0
+                            
+                        # Guarda a linha calculada perfeitamente formatada
+                        linhas_folha_calculadas.append({
+                            "Funcioário": f_nome,
+                            "Tipo": f_tipo,
+                            "Base (R$)": f_base,
+                            "Vales (R$)": f_vales,
+                            "Líquido (R$)": v_liquido,
+                            "Status": f_status
                         })
-                    cursor.close()
+                        
                 conn.close()
-
-                # --- INTERFACE DE EXIBIÇÃO EM TABELA COMPACTA ---
-                if linhas_folha_calculada:
-                    df_fp_calculado = pd.DataFrame(linhas_folha_calculada)
-                    chave_cache_ext_fp = f"tabela_folha_pagto_extrato_v4_{periodo_ext_chave}"
-                    
+                
+                # Exibe a planilha final totalmente calculada e destravada na tela
+                if linhas_folha_calculadas:
+                    df_fp_final = pd.DataFrame(linhas_folha_calculadas)
                     st.data_editor(
-                        df_fp_calculado,
+                        df_fp_final,
                         column_config={
-                            "ID_FP": None,
-                            "Funcionário": st.column_config.TextColumn("👤 Funcionário", width=180, disabled=True),
-                            "Tipo": st.column_config.TextColumn("🗂️ Tipo", width=100, disabled=True),
-                            "Base (R$)": st.column_config.NumberColumn("💰 Base (R$)", format="R$ %.2f", width=110, disabled=True),
-                            "Vales (R$)": st.column_config.NumberColumn("📉 Vales (R$)", format="R$ %.2f", width=110, disabled=True),
-                            "Líquido (R$)": st.column_config.NumberColumn("💵 Líquido (R$)", format="R$ %.2f", width=120, disabled=True),
-                            "Status": st.column_config.SelectboxColumn("Status", options=["Pendente", "Pago"], required=True, width=110)
+                            "Funcioário": st.column_config.TextColumn("👤 Funcionário", width=220, disabled=True),
+                            "Tipo": st.column_config.TextColumn("🎛️ Tipo", width=120, disabled=True),
+                            "Base (R$)": st.column_config.NumberColumn("💰 Base (R$)", format="R$ %.2f", width=120, disabled=True),
+                            "Vales (R$)": st.column_config.NumberColumn("📉 Vales (R$)", format="R$ %.2f", width=120, disabled=True),
+                            "Líquido (R$)": st.column_config.NumberColumn("💵 Líquido (R$)", format="R$ %.2f", width=130, disabled=True),
+                            "Status": st.column_config.SelectboxColumn("📋 Status", options=["Pendente", "Pago"], width=120, disabled=False)
                         },
-                        hide_index=True, use_container_width=True, key=chave_cache_ext_fp
+                        hide_index=True, use_container_width=True, key=f"tabela_fp_view_master_{periodo_ext_chave}"
                     )
-                    
-                    # Salva alterações de Status (Pendente / Pago) de forma automática
-                    if chave_cache_ext_fp in st.session_state and st.session_state[chave_cache_ext_fp]["edited_rows"]:
-                        conn = sqlite3.connect("dlr_confecoes_v3.db"); cursor = conn.cursor()
-                        for idx_s, mudancas in st.session_state[chave_cache_ext_fp]["edited_rows"].items():
-                            id_reg_fp = int(df_fp_calculado.iloc[int(idx_s)]["ID_FP"])
-                            if "Status" in mudancas:
-                                cursor.execute("UPDATE historico_folha_pagamento SET status_pagto = ? WHERE id = ?", (mudancas["Status"], id_reg_fp))
-                        conn.commit(); conn.close(); st.rerun()
                 else:
-                    st.info("💡 Nenhuma movimentação de folha localizada para o período selecionado.")              
+                    st.info(f"💡 Nenhuma movimentação de folha registrada para o período {periodo_ext_chave}.")              
     # ==============================================================================
 # 🚪 RECONECTOR MASTER DLR — LOGOUT DA PORTA DO ADMIN E ENTRADA DA FÁBRICA
 # ==============================================================================
@@ -2365,119 +2568,259 @@ if st.session_state.sistema_autorizado and st.session_state.perfil_usuario == "C
         conn = sqlite3.connect("dlr_confecoes_v3.db")
         cursor = conn.cursor()
         
-        # Garante preventivamente a existência da tabela de ponto no HD
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS registro_ponto_horistas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, mes_ano TEXT, data_registro TEXT, costureira TEXT, horas_totais REAL
-            )
-        """)
+        # Garante preventivamente a existência das tabelas no cofre v3
+        cursor.execute("CREATE TABLE IF NOT EXISTS registro_ponto_horistas (id INTEGER PRIMARY KEY AUTOINCREMENT, mes_ano TEXT, data_registro TEXT, costureira TEXT, horas_totais REAL)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS funcionarios (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, tipo_pagamento TEXT, valor_base REAL, chave_pix TEXT, externo TEXT, status_cadastro TEXT)")
         
-        # Garante que a tabela geral de funcionários exista no banco de dados resetado
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS funcionarios (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, tipo_pagamento TEXT, valor_base REAL, chave_pix TEXT, externo TEXT, status_cadastro TEXT
-            )
-        """)
-        
-        # 🚀 BUSCA TOTAL: Captura o nome de todos os colaboradores ativos sem nenhuma trava de cargo ou pagamento
-        cursor.execute("SELECT nome FROM funcionarios WHERE status_cadastro != 'Demitido' ORDER BY nome ASC")
-        
-        # 🚀 CORREÇÃO DE OURO INDESTRUTÍVEL: O row[0] captura o texto puro do nome e limpa os parênteses (,) e aspas!
-        lista_horistas_ponto = [str(row[0]).strip() for row in cursor.fetchall() if row and row[0] is not None]
-        conn.close()
-
-        # --- 🎨 FORMULÁRIO DE LANÇAMENTO EXPANDIDO DE PAREDE A PAREDE ---
-        with st.form(key="form_importar_ponto_manual_dlr", clear_on_submit=True):
-            col_pt1, col_ph2 = st.columns(2)
-            with col_pt1:
-                cost_ponto_sel = st.selectbox(
-                    "Selecionar Costureira Horista Ativa",
-                    lista_horistas_ponto if lista_horistas_ponto else ["Nenhuma costureira horista habilitada no sistema"],
-                    key="pt_costureira_master"
-                )
-            with col_ph2:
-                horas_ponto_input = st.number_input(
-                    "Total de Horas Trabalhadas no Mês",
-                    min_value=0.0,
-                    step=1.0,
-                    format="%.2f",
-                    key="pt_horas_master"
-                )
-                
-            st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
-            btn_salvar_ponto = st.form_submit_button("📥 Registrar Total de Horas no Ponto", use_container_width=True)
-
-        # --- MOTOR DE GRAVAÇÃO NO COFRE V3 ---
-        if btn_salvar_ponto:
-            if cost_ponto_sel == "Nenhuma costureira horista habilitada no sistema":
-                st.error("❌ Operação Recusada! Vá na Ficha L.F da Administração e mude 'Lançar no Manual' para 'Sim' nas funcionárias!")
-            elif horas_ponto_input <= 0:
-                st.error("❌ Operação Recusada! O total de horas deve ser maior que zero!")
-            else:
-                conn = sqlite3.connect("dlr_confecoes_v3.db"); cursor = conn.cursor()
-                
-                # Se já tiver um ponto lançado para ela neste mesmo mês, atualiza! Senão, faz um novo insert!
-                cursor.execute("SELECT id FROM registro_ponto_horistas WHERE costureira = ? AND mes_ano = ?", (cost_ponto_sel, periodo_ativo_chave))
-                existe_ponto = cursor.fetchone()
-                
-                data_hoje_txt = datetime.datetime.now().strftime("%d/%m/%Y")
-                
-                if existe_ponto:
-                    cursor.execute("UPDATE registro_ponto_horistas SET horas_totais = ?, data_registro = ? WHERE id = ?", (horas_ponto_input, data_hoje_txt, existe_ponto[0]))
-                else:
-                    cursor.execute("""
-                        INSERT INTO registro_ponto_horistas (mes_ano, data_registro, costureira, horas_totais)
-                        VALUES (?, ?, ?, ?)
-                    """, (periodo_ativo_chave, data_hoje_txt, cost_ponto_sel, horas_ponto_input))
-                    
-                conn.commit(); conn.close()
-                st.success(f"🎉 Sucesso! Registrado {horas_ponto_input:.2f} horas para a colaboradora {cost_ponto_sel}!")
-                st.rerun()
-
-        # --- 📊 PLANILHA DE HISTÓRICO DE HORAS LANÇADAS NO MÊS ---
-        st.markdown("<br><hr style='margin-top: 15px; margin-bottom: 15px; border: 0; border-top: 1px solid #424242;'>", unsafe_allow_html=True)
-        st.markdown("##### 📈 Espelho de Horas Acumuladas no Mês")
-        
+        # --- MOTOR DE PUXADA DINÂMICA MASTER GERENCIAL: EXTRAÇÃO CIRÚRGICA DE TEXTO PURE ---
         conn = sqlite3.connect("dlr_confecoes_v3.db")
-        df_ponto_mes = pd.read_sql_query(f"SELECT id, data_registro, costureira, horas_totais FROM registro_ponto_horistas WHERE mes_ano = '{periodo_ativo_chave}' ORDER BY costureira ASC", conn)
-        conn.close()
+        cursor = conn.cursor()
         
-        if not df_ponto_mes.empty:
-            df_pt_visao = df_ponto_mes.copy()
-            df_pt_visao.columns = ["ID_P", "Data do Lançamento", "Nome da Costureira", "Horas Totais Registradas"]
-            
-            st.data_editor(
-                df_pt_visao,
-                column_config={
-                    "ID_P": None,
-                    "Data do Lançamento": st.column_config.TextColumn("Data de Registro", width=140, disabled=True),
-                    "Nome da Costureira": st.column_config.TextColumn("Nome da Costureira", width=300, disabled=True),
-                    "Horas Totais Registradas": st.column_config.NumberColumn("Horas Acumuladas", format="%.2f hrs", width=160, disabled=True)
-                },
-                hide_index=True, use_container_width=True, key=f"tabela_ponto_horistas_audit_{periodo_ativo_chave}"
+        # 🚀 CORREÇÃO DEFINITIVA: Busca todos os nomes sem filtros de cargo ou manual na Conferência
+        cursor.execute("""
+            SELECT DISTINCT TRIM(nome) AS nome
+            FROM funcionarios
+            WHERE nome IS NOT NULL
+              AND TRIM(nome) <> ''
+            ORDER BY nome COLLATE NOCASE ASC
+        """)
+        
+        # 🎯 DESEMPACOTA COM SEGURANÇA: O row[0] captura o texto puro sem parênteses chatos!
+        lista_horistas_ponto = [
+            str(row[0]).strip()
+            for row in cursor.fetchall()
+            if row and row[0] is not None
+        ]
+        conn.close()
+
+        # --- 🎨 CARTÃO DE PONTO DIÁRIO EXPANDIDO DE PAREDE A PAREDE (ESTILO CARTÃO IMPRESSO) ---
+        if lista_horistas_ponto:
+            # Seletor master livre de bloqueios que exibe toda a empresa ativa
+            cost_ponto_sel = st.selectbox(
+                "👤 Selecionar Colaborador Ativo para Visualizar o Ponto:",
+                lista_horistas_ponto,
+                key="pt_costureira_master"
             )
             
-            # --- 🗑️ BOTÃO DE EXCLUSÃO SELETIVA NO RODAPÉ ---
-            st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
-            lista_p_excluir = [f"ID: {r['id']} | {r['costureira']} ({r['horas_totais']:.2f} hrs)" for _, r in df_ponto_mes.iterrows()]
-            pt_selecionado_excluir = st.selectbox("🗑️ Selecione um lançamento para remover do ponto:", ["Selecionar..."] + lista_p_excluir, key=f"lix_ponto_{periodo_ativo_chave}")
+            # 🚀 ANTES DE TUDO: Conecta e garante que as 31 linhas de calendário existam 100% LIMPAS no cofre para este colaborador
+            conn = sqlite3.connect("dlr_confecoes_v3.db")
+            cursor = conn.cursor()
+            for d in range(1, 32):
+                dia_str = f"{d:02d}"
+                cursor.execute("""
+                    SELECT id FROM registro_ponto_diario 
+                    WHERE mes_ano = ? AND nome_costureira = ? AND dia_mes = ?
+                """, (periodo_ativo_chave, cost_ponto_sel, dia_str))
+                if not cursor.fetchone():
+                    # Injeta o dia em branco se ele não existir, impedindo o DataFrame de quebrar vazio!
+                    cursor.execute("""
+                        INSERT INTO registro_ponto_diario (mes_ano, nome_costureira, dia_mes, entrada_1, saida_1, entrada_2, saida_2, horas_trabalhadas_dia)
+                        VALUES (?, ?, ?, '', '', '', '', 0.0)
+                    """, (periodo_ativo_chave, cost_ponto_sel, dia_str))
+            conn.commit()
+            conn.close()
+
+            # --- ⚙️ ENGRENHAGEM DE TRANSPOSIÇÃO DE MATRIZ: AGORA ELE NUNCA MAIS VEM VAZIO! ---
+            conn = sqlite3.connect("dlr_confecoes_v3.db")
+            df_ponto_bruto = pd.read_sql_query(f"""
+                SELECT dia_mes, entrada_1, saida_1, entrada_2, saida_2, horas_trabalhadas_dia
+                FROM registro_ponto_diario
+                WHERE mes_ano = '{periodo_ativo_chave}' AND nome_costureira = '{cost_ponto_sel}'
+                ORDER BY dia_mes ASC
+            """, conn)
+            conn.close()
+
+            # Criamos uma estrutura pura de listas horizontais para destravar o st.data_editor
+            matriz_ponto = {
+                "Marcação / Batida": ["🕐 Entrada 1", "⏳ Saída 1 (Almoço)", "🕐 Entrada 2", "⏳ Saída 2", "📊 Total Dia (hrs)"]
+            }
             
-            if pt_selecionado_excluir != "Selecionar...":
-                id_pt_del = int(pt_selecionado_excluir.split("|")[0].replace("ID: ", "").strip())
-                st.warning("⚠️ **Aviso de Exclusão:** Tem certeza que deseja apagar permanentemente essas horas do histórico?")
-                c_d_p1, c_del_p2 = st.columns(2)
-                with c_d_p1:
-                    if st.button("✅ Sim, apagar horas", use_container_width=True, type="primary", key="btn_conf_del_pt"):
-                        conn = sqlite3.connect("dlr_confecoes_v3.db"); cursor = conn.cursor()
-                        cursor.execute("DELETE FROM registro_ponto_horistas WHERE id = ?", (id_pt_del,))
-                        conn.commit(); conn.close()
-                        if f"lix_ponto_{periodo_ativo_chave}" in st.session_state:
-                            st.session_state.pop(f"lix_ponto_{periodo_ativo_chave}")
-                        st.success("Removido!"); st.rerun()
-                with c_del_p2:
-                    if st.button("❌ Não, manter", use_container_width=True, key="btn_canc_del_pt"):
-                        if f"lix_ponto_{periodo_ativo_chave}" in st.session_state:
-                            st.session_state.pop(f"lix_ponto_{periodo_ativo_chave}")
-                        st.rerun()
+            # Popula horizontalmente cada dia do mês de 01 a 31 garantindo strings puras editáveis
+            for _, row_b in df_ponto_bruto.iterrows():
+                d_col = str(row_b['dia_mes'])
+                matriz_ponto[d_col] = [
+                    str(row_b['entrada_1']) if row_b['entrada_1'] is not None else '',
+                    str(row_b['saida_1']) if row_b['saida_1'] is not None else '',
+                    str(row_b['entrada_2'] if row_b['entrada_2'] is not None else ''),
+                    str(row_b['saida_2'] if row_b['saida_2'] is not None else ''),
+                    str(f"{float(row_b['horas_trabalhadas_dia']):.2f} hrs") if row_b['horas_trabalhadas_dia'] else '0.00 hrs'
+                ]
+            
+            df_ponto_horizontal = pd.DataFrame(matriz_ponto)
+
+            # 🚀 PRIMEIRO: Puxa a soma das horas usando o DataFrame bruto para o Python desenhar o card antes
+            horas_totais_mes = float(df_ponto_bruto['horas_trabalhadas_dia'].sum()) if not df_ponto_bruto.empty else 0.0
+
+            # 🚀 MOTOR DE BUSCA DO VALOR HORA: Busca quanto essa costureira ganha por hora
+            conn_valor_hora = sqlite3.connect("dlr_confecoes_v3.db")
+            cursor_vh = conn_valor_hora.cursor()
+            cursor_vh.execute("SELECT valor_base FROM historico_folha_pagamento WHERE nome = ? AND mes_ano = ?", (cost_ponto_sel, periodo_ativo_chave))
+            res_vh = cursor_vh.fetchone()
+            
+            if not res_vh:
+                cursor_vh.execute("SELECT valor_base FROM funcionarios WHERE nome = ?", (cost_ponto_sel,))
+                res_vh = cursor_vh.fetchone()
+            conn_valor_hora.close()
+            
+            # 🚀 CORREÇÃO DE OURO: Adicionado o [0] para desempacotar a tupla com segurança e sumir o erro!
+            valor_por_hora = float(res_vh[0]) if res_vh and res_vh[0] is not None else 0.0
+            salario_acumulado_ponto = horas_totais_mes * valor_por_hora
+
+            # 🚀 MOTOR DE BUSCA EM TEMPO REAL COMPATÍVEL COM MAIÚSCULAS/MINÚSCULAS (UPPER)
+            try:
+                conn_prod_f = sqlite3.connect("dlr_confecoes_v3.db")
+                
+                # Usamos UPPER() dos dois lados para ignorar qualquer diferença de digitação no nome!
+                df_prod_func = pd.read_sql_query(f"""
+                    SELECT SUM(valor_total) 
+                    FROM producao_hora_hora 
+                    WHERE mes_ano = '{periodo_ativo_chave}' 
+                      AND UPPER(costureira) = UPPER('{cost_ponto_sel}')
+                """, conn_prod_f)
+                conn_prod_f.close()
+                
+                # Desempacota o valor numérico puro de forma blindada tratando nulos
+                if not df_prod_func.empty and df_prod_func.iloc[0, 0] is not None:
+                    total_produzido_f_mes = float(df_prod_func.iloc[0, 0])
+                else:
+                    total_produzido_f_mes = 0.0
+            except:
+                total_produzido_f_mes = 0.0
+
+            # 📐 CÁLCULO CIENTÍFICO DA BALANÇA DE EFICIÊNCIA COMERCIAL
+            balanco_eficiencia_real = total_produzido_f_mes - salario_acumulado_ponto
+            
+            # Define dinamicamente a cor da balança baseado na lucratividade da costureira
+            if balanco_eficiencia_real >= 0:
+                cor_balanco_card = "#2E7D32" # 🟢 Verde Executivo
+                texto_balanco_sinal = "PRODUÇÃO MAIOR (POSITIVO)"
+            else:
+                cor_balanco_card = "#C62828" # 🔴 Vermelho Alerta
+                texto_balanco_sinal = "PRODUÇÃO MENOR (NEGATIVO)"
+
+            # 🎨 SEGUNDO: Desenha a nova fileira master com os 4 cards perfeitamente alinhados na horizontal
+            col_c1_top, col_c2_top, col_c3_top, col_c4_top = st.columns(4, gap="small")
+            
+            with col_c1_top:
+                st.markdown(f"""
+                    <div style='background-color: #4A154B; padding: 10px 5px; border-radius: 6px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; height: 75px;'>
+                        <div style='font-size: 11px; font-weight: normal; color: #F3E5F5; opacity: 0.9; text-transform: uppercase;'>🗂️ Horas no Mês</div>
+                        <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 19px; font-weight: bold;'>{horas_totais_mes:.2f} hrs</h4>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+            with col_c2_top:
+                st.markdown(f"""
+                    <div style='background-color: #E65100; padding: 10px 5px; border-radius: 6px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; height: 75px;'>
+                        <div style='font-size: 11px; font-weight: normal; color: #FFF3E0; opacity: 0.9; text-transform: uppercase;'>💰 Salário Acumulado</div>
+                        <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 19px; font-weight: bold;'>R$ {salario_acumulado_ponto:,.2f}</h4>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            with col_c3_top:
+                st.markdown(f"""
+                    <div style='background-color: #0288D1; padding: 10px 5px; border-radius: 6px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; height: 75px;'>
+                        <div style='font-size: 11px; font-weight: normal; color: #E1F5FE; opacity: 0.9; text-transform: uppercase;'>🧵 Total Produzido</div>
+                        <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 19px; font-weight: bold;'>R$ {total_produzido_f_mes:,.2f}</h4>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            with col_c4_top:
+                st.markdown(f"""
+                    <div style='background-color: {cor_balanco_card}; padding: 10px 5px; border-radius: 6px; color: white; text-align: center; box-shadow: 1px 1px 4px rgba(0,0,0,0.15); display: flex; flex-direction: column; justify-content: center; height: 75px;'>
+                        <div style='font-size: 9px; font-weight: normal; color: #FFFFFF; opacity: 0.85; text-transform: uppercase;'>📊 {texto_balanco_sinal}</div>
+                        <h4 style='margin-top: 4px; margin-bottom: 0px; color: white; font-size: 19px; font-weight: bold;'>R$ {balanco_eficiencia_real:,.2f}</h4>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            # 🎨 TERCEIRO: Renderiza a planilha horizontal de parede a parede logo abaixo deles
+            st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
+            st.markdown(f"##### ⏱️ Matriz de Ponto Horizontal — {cost_ponto_sel}")
+            st.write("Altere os horários de entrada e saída direto nas células do dia (Ex: 07:29, 12:00, 12:59, 17:31):")
+            
+            # 🔓 DESTRAVA COMPLETA DE CÉLULAS: Garante escrita livre em todos os 31 dias na horizontal
+            config_colunas_horiz = {
+                "Marcação / Batida": st.column_config.TextColumn("⏱️ Marcação / Batida", width=170, disabled=True)
+            }
+            for d in range(1, 32):
+                dia_str = f"{d:02d}"
+                config_colunas_horiz[dia_str] = st.column_config.TextColumn(dia_str, width=65, disabled=False)
+
+            chave_cartao_ponto_horizontal = f"editor_ponto_horiz_v5_{cost_ponto_sel}_{periodo_ativo_chave}"
+            tabela_ponto_editada = st.data_editor(
+                df_ponto_horizontal,
+                column_config=config_colunas_horiz,
+                hide_index=True, use_container_width=True, key=chave_cartao_ponto_horizontal
+            )
+
+            # 💾 MOTOR DE INTELIGÊNCIA HORÁRIA DESTRAVADO PARA A MATRIZ HORIZONTAL
+            if chave_cartao_ponto_horizontal in st.session_state and st.session_state[chave_cartao_ponto_horizontal]["edited_rows"]:
+                conn = sqlite3.connect("dlr_confecoes_v3.db")
+                cursor = conn.cursor()
+                
+                colunas_banco_mapeadas = ["entrada_1", "saida_1", "entrada_2", "saida_2"]
+                
+                for idx_linha_ed, mudancas_colunas in st.session_state[chave_cartao_ponto_horizontal]["edited_rows"].items():
+                    num_linha = int(idx_linha_ed)
+                    if num_linha >= 4: 
+                        continue # Bloqueia alterações manuais na linha de totais calculados
+                    
+                    nome_campo_banco = colunas_banco_mapeadas[num_linha]
+                    
+                    for dia_modificado, novo_horario in mudancas_colunas.items():
+                        horario_texto = str(novo_horario).strip()
+                        dia_chave_banco = str(dia_modificado).zfill(2)
+                        
+                        # Atualiza a batida de ponto do respectivo dia no banco
+                        cursor.execute(f"""
+                            UPDATE registro_ponto_diario 
+                            SET {nome_campo_banco} = ? 
+                            WHERE mes_ano = ? AND nome_costureira = ? AND dia_mes = ?
+                        """, (horario_texto, periodo_ativo_chave, cost_ponto_sel, dia_chave_banco))
+                        
+                        # --- 📐 RECALCULO MATEMÁTICO DIÁRIO AUTOMÁTICO POR INDEPENDÊNCIA DE TURNOS ---
+                        cursor.execute("""
+                            SELECT entrada_1, saida_1, entrada_2, saida_2 
+                            FROM registro_ponto_diario 
+                            WHERE mes_ano = ? AND nome_costureira = ? AND dia_mes = ?
+                        """, (periodo_ativo_chave, cost_ponto_sel, dia_chave_banco))
+                        res_batidas_dia = cursor.fetchone()
+                        
+                        if res_batidas_dia:
+                            e1, s1, e2, s2 = res_batidas_dia
+                            e1 = str(e1).strip(); s1 = str(s1).strip(); e2 = str(e2).strip(); s2 = str(s2).strip()
+                            
+                            minutos_totais_dia = 0.0
+                            fmt_p = "%H:%M"
+                            
+                            if len(e1) == 5 and len(s1) == 5 and ":" in e1 and ":" in s1:
+                                try:
+                                    dt_e1 = datetime.datetime.strptime(e1, fmt_p); dt_s1 = datetime.datetime.strptime(s1, fmt_p)
+                                    if dt_s1 > dt_e1: minutos_totais_dia += (dt_s1 - dt_e1).seconds / 60
+                                except: pass
+                            if len(e2) == 5 and len(s2) == 5 and ":" in e2 and ":" in s2:
+                                try:
+                                    dt_e2 = datetime.datetime.strptime(e2, fmt_p); dt_s2 = datetime.datetime.strptime(s2, fmt_p)
+                                    if dt_s2 > dt_e2: minutos_totais_dia += (dt_s2 - dt_e2).seconds / 60
+                                except: pass
+                                  
+                            horas_finais_dia = round(minutos_totais_dia / 60, 2)
+                            cursor.execute("""
+                                UPDATE registro_ponto_diario 
+                                SET horas_trabalhadas_dia = ? 
+                                WHERE mes_ano = ? AND nome_costureira = ? AND dia_mes = ?
+                            """, (horas_finais_dia, periodo_ativo_chave, cost_ponto_sel, dia_chave_banco))
+                
+                # 🚀 RECALCULO GERAL DO MÊS BLINDADO: Soma todas as linhas do período de forma segura
+                cursor.execute("SELECT SUM(horas_trabalhadas_dia) FROM registro_ponto_diario WHERE mes_ano = ? AND nome_costureira = ?", (periodo_ativo_chave, cost_ponto_sel))
+                res_soma_m = cursor.fetchone()
+                nova_soma_mes = float(res_soma_m[0]) if res_soma_m and res_soma_m[0] is not None else 0.0
+                
+                dt_hoje_txt = datetime.datetime.now().strftime("%d/%m/%Y")
+                cursor.execute("UPDATE registro_ponto_horistas SET horas_totais = ?, data_registro = ? WHERE costureira = ? AND mes_ano = ?", (nova_soma_mes, dt_hoje_txt, cost_ponto_sel, periodo_ativo_chave))
+                
+                conn.commit()
+                conn.close()
+                st.rerun()
         else:
-            st.info("💡 Nenhuma hora de ponto foi registrada para este mês ainda na conferência.")
+            st.info("💡 Nenhuma colaboradora cadastrada como Horista na Ficha L.F para este período.")
